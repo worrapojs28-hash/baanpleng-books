@@ -41,6 +41,18 @@ let cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null};
 let fb=null,user=null,role=null,canWrite=false,M=null,unsubs=[],memberUnsub=null,pending=false,fromCache=true,loaded=false,gateMode='';
 let es=null,ps=null,ss=null;
 const isOwner=()=>role==='owner';
+// staff permissions (owners can do everything). Staff without a perms map can only take stock out.
+let perms=null;
+const PERMS={stockUse:'เบิกใช้วัตถุดิบ',stockIn:'รับของเข้าสต็อก',stockCount:'นับสต็อกประจำเดือน',acct:'บันทึกรายรับ-รายจ่ายและค้างชำระ'};
+const PERM_SHORT={stockUse:'เบิกใช้',stockIn:'รับเข้า',stockCount:'นับสต็อก',acct:'บัญชี'};
+const DEFAULT_PERMS={stockUse:true};
+const can=p=>isOwner()||!!(perms&&perms[p]);
+const MODE_PERM={in:'stockIn',use:'stockUse',count:'stockCount'};
+const canMode=m=>can(MODE_PERM[m]);
+const stockModes=()=>['in','use','count'].filter(canMode);
+const anyStock=()=>stockModes().length>0;
+const allowedTabs=()=>isOwner()?['home','list','stock','debt','report']:[...(can('acct')?['home','list']:[]),...(anyStock()?['stock']:[]),...(can('acct')?['debt']:[])];
+const cleanPerms=o=>{const r={};for(const k of Object.keys(PERMS))if(o&&o[k])r[k]=true;return r};
 
 /* ---------- model ---------- */
 function build(){
@@ -105,14 +117,15 @@ function render(){
   if(!role)return;
   build();renderStatus();
   byId('shopName').textContent=M.s.shop;
-  if(!isOwner()&&ui.tab==='report')ui.tab='home';
+  const tabs=allowedTabs();if(!tabs.includes(ui.tab))ui.tab=tabs[0]||'none';
   const ae=document.activeElement,aid=ae&&ae.id&&byId('view').contains(ae)?ae.id:null,sel=aid?[ae.selectionStart,ae.selectionEnd]:null;
-  byId('view').innerHTML=!loaded?`<div class="empty"><b>กำลังโหลดบัญชี</b><p>ครั้งแรกต้องต่ออินเทอร์เน็ต หลังจากนั้นเปิดได้แม้ไม่มีเน็ต</p></div>`
+  byId('view').innerHTML=!loaded&&ui.tab!=='none'?`<div class="empty"><b>กำลังโหลดบัญชี</b><p>ครั้งแรกต้องต่ออินเทอร์เน็ต หลังจากนั้นเปิดได้แม้ไม่มีเน็ต</p></div>`
+    :ui.tab==='none'?`<div class="empty"><b>ยังไม่ได้รับมอบหน้าที่</b><p>ให้เจ้าของร้านเปิดสิทธิ์ให้ในหน้าตั้งค่า → ผู้ใช้งานและสิทธิ์</p></div>`
     :({home:isOwner()?vHome:vStaffHome,list:vList,stock:vStock,debt:vDebt,report:vReport}[ui.tab]||vHome)();
   if(aid){const n=byId(aid);if(n){n.focus();try{if(sel&&sel[0]!=null)n.setSelectionRange(sel[0],sel[1])}catch(e){}}}
-  document.querySelectorAll('.tab').forEach(t=>{t.setAttribute('aria-current',t.dataset.tab===ui.tab?'page':'false');if(t.dataset.tab==='report')t.hidden=!isOwner()});
-  byId('tabgrid').style.gridTemplateColumns=`repeat(${isOwner()?5:4},1fr)`;
-  const fab=byId('fab');fab.hidden=!canWrite;
+  document.querySelectorAll('.tab').forEach(t=>{t.setAttribute('aria-current',t.dataset.tab===ui.tab?'page':'false');t.hidden=!tabs.includes(t.dataset.tab)});
+  byId('tabgrid').style.gridTemplateColumns=`repeat(${Math.max(1,tabs.length)},1fr)`;byId('app').querySelector('.tabbar').hidden=tabs.length<2;
+  const fab=byId('fab');fab.hidden=!canWrite||(ui.tab==='stock'?!anyStock():!can('acct'));
   if(ui.tab==='stock'){if(fab.dataset.act!=='st-scan'){fab.dataset.act='st-scan';fab.innerHTML=ICON_SCAN;fab.setAttribute('aria-label','สแกนบาร์โค้ด')}}
   else if(fab.dataset.act!=='add'){fab.dataset.act='add';fab.textContent='+';fab.setAttribute('aria-label','บันทึกรายการใหม่')}
 }
@@ -436,7 +449,8 @@ function accountSection(){
 function staffSettingsHtml(){
   return `<div class="sh-head"><h2>ตั้งค่า</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
   ${accountSection()}
-  <span class="hint">พนักงานบันทึกรายการ รับชำระหนี้ และแก้ไขรายการที่ตัวเองบันทึกได้ ส่วนรายงานกำไรและการตั้งค่าร้านเป็นของเจ้าของร้าน</span>
+  <div class="fld"><span>หน้าที่ของคุณ</span><div class="note">${Object.keys(PERMS).filter(k=>can(k)).map(k=>PERMS[k]).join('<br>')||'ยังไม่ได้รับมอบหน้าที่'}</div></div>
+  <span class="hint">เจ้าของร้านเป็นผู้กำหนดหน้าที่ ถ้าต้องทำอย่างอื่นเพิ่ม ให้แจ้งเจ้าของร้าน</span>
   <div class="sh-foot"><button class="btn primary" data-act="close">ปิด</button></div>`;
 }
 const ROLE={owner:'เจ้าของร้าน',staff:'พนักงาน'};
@@ -447,20 +461,24 @@ function peopleSection(){
   const row=m=>{
     const locked=m.id===user.uid||m.id===ss.founder;
     const note=m.id===ss.founder?'เจ้าของร้านหลัก':'';
-    return `<div class="drow"><div class="main"><span class="t">${esc(m.email||'ไม่มีอีเมล')}</span>
-      <span class="s">${locked?`<span class="chip ${m.role==='owner'?'ok':'warn'}">${ROLE[m.role]||m.role}</span>`:''}${[note,m.id===user.uid?'คุณ':''].filter(Boolean).map(esc).join(' · ')}</span></div>
+    const mp=m.perms&&typeof m.perms==='object'?m.perms:DEFAULT_PERMS;
+    return `<div class="drow wrap-row"><div class="main"><span class="t">${esc(m.email||'ไม่มีอีเมล')}</span>
+      <span class="s">${locked?`<span class="chip ${m.role==='owner'?'ok':'warn'}">${ROLE[m.role]||m.role}</span>`:''}${[note,m.id===user.uid?'คุณ':''].filter(Boolean).map(esc).join(' · ')}</span>
+      ${m.role==='staff'&&!locked?`<span class="pchips" role="group" aria-label="หน้าที่ของ ${esc(m.email||'')}">${Object.keys(PERMS).map(k=>`<button class="pchip" data-act="p-perm" data-uid="${esc(m.id)}" data-v="${k}" aria-pressed="${!!mp[k]}">${PERM_SHORT[k]}</button>`).join('')}</span>`:''}</div>
       ${locked?'':`<select id="s-role-${esc(m.id)}" data-uid="${esc(m.id)}" aria-label="สิทธิ์ของ ${esc(m.email||'')}">${['owner','staff'].map(r=>`<option value="${r}" ${m.role===r?'selected':''}>${ROLE[r]}</option>`).join('')}</select>
         ${ss.rmUid===m.id?`<button class="btn sm danger" data-act="p-rm-yes" data-v="${esc(m.id)}">ยืนยันเอาออก</button>`:`<button class="btn sm" data-act="p-rm" data-v="${esc(m.id)}">เอาออก</button>`}`}</div>`;
   };
   return `<div class="fld"><span>ผู้ใช้งานและสิทธิ์</span>
     ${ss.peopleErr?`<span class="hint">${esc(ss.peopleErr)}</span>`:''}
     <div class="list">${ms.map(row).join('')}
-    ${inv.map(i=>`<div class="drow"><div class="main"><span class="t">${esc(i.id)}</span><span class="s"><span class="chip warn">รอเข้าใช้งาน</span><span>${ROLE[i.role]||'พนักงาน'}</span></span></div><button class="btn sm" data-act="p-uninvite" data-v="${esc(i.id)}">ยกเลิก</button></div>`).join('')}</div>
+    ${inv.map(i=>`<div class="drow"><div class="main"><span class="t">${esc(i.id)}</span><span class="s"><span class="chip warn">รอเข้าใช้งาน</span><span>${ROLE[i.role]||'พนักงาน'}${i.role!=='owner'?' · '+(Object.keys(i.perms||DEFAULT_PERMS).filter(k=>(i.perms||DEFAULT_PERMS)[k]).map(k=>PERM_SHORT[k]).join(', ')||'ไม่มีหน้าที่'):''}</span></span></div><button class="btn sm" data-act="p-uninvite" data-v="${esc(i.id)}">ยกเลิก</button></div>`).join('')}</div>
     <div class="addrow"><input id="s-invite" type="email" inputmode="email" autocomplete="off" placeholder="อีเมลที่จะเชิญ" value="${esc(ss.inviteEmail||'')}">
       <select id="s-invite-role" aria-label="สิทธิ์ของคนที่เชิญ">${['staff','owner'].map(r=>`<option value="${r}" ${(ss.inviteRole||'staff')===r?'selected':''}>${ROLE[r]}</option>`).join('')}</select>
       <button class="btn sm" data-act="p-invite">เชิญ</button></div>
+    ${(ss.inviteRole||'staff')==='staff'?`<div class="fld"><span class="small">หน้าที่ของคนที่เชิญ</span><span class="pchips">${Object.keys(PERMS).map(k=>`<button class="pchip" data-act="p-iperm" data-v="${k}" aria-pressed="${!!(ss.invitePerms||DEFAULT_PERMS)[k]}">${PERM_SHORT[k]}</button>`).join('')}</span></div>`:''}
     ${ss.inviteErr?`<div class="err" style="margin-top:0">${esc(ss.inviteErr)}</div>`:''}
-    <div class="note"><b>เจ้าของร้าน</b> เห็นทุกอย่าง ทั้งยอดเงิน กำไร รายงาน ตั้งค่า และจัดการผู้ใช้<br><b>พนักงาน</b> บันทึกรายรับรายจ่าย รับชำระหนี้ และแก้ไขรายการของตัวเองได้ ไม่เห็นยอดเงินคงเหลือ กำไร รายงาน และการถอนเงินเจ้าของ</div>
+    <div class="note"><b>เจ้าของร้าน</b> เห็นทุกอย่าง ทั้งยอดเงิน กำไร รายงาน ตั้งค่า และจัดการผู้ใช้<br><b>พนักงาน</b> ทำได้เฉพาะหน้าที่ที่ติ๊กไว้ ค่าเริ่มต้นคือเบิกใช้วัตถุดิบอย่างเดียว · ไม่เห็นยอดเงินคงเหลือ กำไร รายงาน ราคาวัตถุดิบ และการถอนเงินเจ้าของ
+      <br><span class="small">เบิกใช้ = หยิบวัตถุดิบไปใช้ · รับเข้า = รับของที่ซื้อมา · นับสต็อก = นับประจำเดือน · บัญชี = บันทึกรายรับรายจ่ายและค้างชำระ</span></div>
     <span class="hint">คนที่ได้รับเชิญเปิดแอป สมัครด้วยอีเมลนี้ และกดยืนยันอีเมล ก็เข้าใช้งานได้ · เปลี่ยนสิทธิ์มีผลทันที · เจ้าของร้านหลักเปลี่ยนสิทธิ์หรือเอาออกไม่ได้</span></div>`;
 }
 function dataSection(){
@@ -567,6 +585,7 @@ function subscribe(){
       subRetry++;if(subRetry<=5){setTimeout(()=>{if(role)subscribe()},1500*subRetry);return}
       toast('บัญชีนี้ไม่มีสิทธิ์อ่านข้อมูลร้าน');return}
     if(e?.code==='unavailable'&&role)setTimeout(()=>{if(role)subscribe()},5000)};
+  if(can('acct')){
   unsubs.push(onSnapshot(collection(fb.db,'days'),{includeMetadataChanges:true},snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.days[ch.doc.id];else cache.days[ch.doc.id]=ch.doc.data()}
     upd('days',snap.metadata);if(!snap.metadata.fromCache||snap.size)loaded=true;if(!snap.metadata.fromCache)subRetry=0;schedule();
@@ -578,9 +597,10 @@ function subscribe(){
   unsubs.push(onSnapshot(doc(fb.db,'meta','settings'),{includeMetadataChanges:true},s=>{
     cache.settings=s.exists()?s.data():null;upd('settings',s.metadata);schedule();
   },onErr));
+  }
   unsubs.push(onSnapshot(collection(fb.db,'stock'),{includeMetadataChanges:true},snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.stock[ch.doc.id];else cache.stock[ch.doc.id]=ch.doc.data()}
-    upd('stock',snap.metadata);schedule();
+    upd('stock',snap.metadata);if(!can('acct')&&(!snap.metadata.fromCache||snap.size))loaded=true;schedule();
   },onErr));
   unsubs.push(onSnapshot(doc(fb.db,'stockcounts',monthOf(todayKey())),{includeMetadataChanges:true},s=>{
     cache.count=s.exists()?s.data():null;upd('count',s.metadata);schedule();
@@ -676,13 +696,14 @@ async function loadPeople(){
     ss.members=m.docs.map(d=>({id:d.id,...d.data()}));ss.invites=i.docs.map(d=>({id:d.id,...d.data()}));rerS();
   }catch(e){if(ss){ss.members=[];ss.invites=[];ss.peopleErr='โหลดรายชื่อไม่ได้ ต้องต่ออินเทอร์เน็ต';rerS()}}
 }
-const ACT={add:'เพิ่ม',edit:'แก้ไข',delete:'ลบ',pay:'ชำระหนี้',settings:'ตั้งค่า',import:'นำเข้าข้อมูล',role:'เปลี่ยนสิทธิ์',invite:'เชิญผู้ใช้',remove:'เอาผู้ใช้ออก'};
+const ACT={perms:'เปลี่ยนหน้าที่',add:'เพิ่ม',edit:'แก้ไข',delete:'ลบ',pay:'ชำระหนี้',settings:'ตั้งค่า',import:'นำเข้าข้อมูล',role:'เปลี่ยนสิทธิ์',invite:'เชิญผู้ใช้',remove:'เอาผู้ใช้ออก'};
 async function openAudit(){
   showSheet(`<div class="sh-head"><h2>ประวัติการแก้ไข</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div><div class="empty"><b>กำลังโหลด</b></div>`);
   try{
     const s=await getDocs(query(collection(fb.db,'audit'),orderBy('ts','desc'),limit(150)));
     const rows=s.docs.map(d=>d.data());
-    const desc=a=>{if(a.act==='role'||a.act==='invite'||a.act==='remove')return [a.after?.email||a.before?.email,a.after?.role?ROLE[a.after.role]:''].filter(Boolean).join(' → ');
+    const desc=a=>{if(a.act==='perms')return `${a.after?.email||''} → ${Object.keys(a.after?.perms||{}).map(k=>PERM_SHORT[k]).join(', ')||'ไม่มีสิทธิ์'}`;
+      if(a.act==='role'||a.act==='invite'||a.act==='remove')return [a.after?.email||a.before?.email,a.after?.role?ROLE[a.after.role]:''].filter(Boolean).join(' → ');
       const v=a.after&&!a.after.del&&a.after.t?a.after:a.before||{};
       return [v.t?TYPE[v.t]:'',v.t==='move'?`${accName(v.acc)} → ${accName(v.to)}`:v.cat,v.amt!=null?money(+v.amt)+' บาท':'',v.note].filter(Boolean).join(' · ')};
     showSheet(`<div class="sh-head"><h2>ประวัติการแก้ไข</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
@@ -726,9 +747,15 @@ document.addEventListener('click',ev=>{
     case 'p-invite':{readSet();const em=(ss.inviteEmail||'').trim().toLowerCase(),irole=ss.inviteRole==='owner'?'owner':'staff';
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ss.inviteErr='ใส่อีเมลให้ถูกต้อง';rerS();break}
       if((ss.members||[]).some(m=>m.email===em)){ss.inviteErr='อีเมลนี้เป็นผู้ใช้งานอยู่แล้ว';rerS();break}
-      ss.inviteErr='';ss.inviteEmail='';ss.invites=[...(ss.invites||[]).filter(i=>i.id!==em),{id:em,role:irole}];
-      fire(setDoc(doc(fb.db,'invites',em),{role:irole,by:user.uid,at:serverTimestamp()}),'invite');audit('invite','','',null,{email:em,role:irole});
+      const ip=irole==='staff'?cleanPerms(ss.invitePerms||DEFAULT_PERMS):null,idoc={role:irole,by:user.uid,at:serverTimestamp()};if(ip)idoc.perms=ip;
+      ss.inviteErr='';ss.inviteEmail='';ss.invites=[...(ss.invites||[]).filter(i=>i.id!==em),{id:em,role:irole,perms:ip||undefined}];
+      fire(setDoc(doc(fb.db,'invites',em),idoc),'invite');audit('invite','','',null,{email:em,role:irole});
       rerS();toast(`เชิญ ${em} เป็น${ROLE[irole]}แล้ว`);break}
+    case 'p-perm':{readSet();const m=(ss.members||[]).find(x=>x.id===b.dataset.uid);if(!m)break;
+      const cur={...(m.perms&&typeof m.perms==='object'?m.perms:DEFAULT_PERMS)};cur[v]=!cur[v];const np=cleanPerms(cur);
+      fire(setDoc(doc(fb.db,'members',m.id),{perms:np,roleAt:serverTimestamp(),roleBy:user.uid},{mergeFields:['perms','roleAt','roleBy']}),'perms');
+      audit('perms','','',{email:m.email||'',perms:m.perms||DEFAULT_PERMS},{email:m.email||'',perms:np});m.perms=np;rerS();break}
+    case 'p-iperm':{readSet();const c={...(ss.invitePerms||DEFAULT_PERMS)};c[v]=!c[v];ss.invitePerms=cleanPerms(c);rerS();break}
     case 'p-uninvite':readSet();fire(deleteDoc(doc(fb.db,'invites',v)),'uninvite');ss.invites=(ss.invites||[]).filter(i=>i.id!==v);rerS();break;
     case 'p-rm':readSet();ss.rmUid=v;rerS();break;
     case 'p-rm-yes':{readSet();const m=(ss.members||[]).find(x=>x.id===v);fire(deleteDoc(doc(fb.db,'members',v)),'rm');audit('remove','','',{email:m?.email||'',role:m?.role||''},null);
@@ -749,7 +776,7 @@ document.addEventListener('click',ev=>{
     case 'st-reopen':fire(setDoc(doc(fb.db,'stockcounts',curMonth()),{m:curMonth(),status:'open'},{merge:true}),'count');audit('stock-reopen','','',null,{m:curMonth()});toast('เปิดการนับอีกครั้งแล้ว');break;
     case 'st-history':openStockHistory();break;
     case 'st-csv':exportStockCsv();break;
-    case 'so-mode':readOp();sa.mode=v;sa.err='';if(v==='in'&&isOwner()&&sa.k&&!sa.price){const lp=cache.stockcost[sa.id]?.last?.[sa.k];if(lp)sa.price=String(lp)}showSheet(stockOpHtml(),true);break;
+    case 'so-mode':if(!canMode(v))break;readOp();sa.mode=v;sa.err='';if(v==='in'&&isOwner()&&sa.k&&!sa.price){const lp=cache.stockcost[sa.id]?.last?.[sa.k];if(lp)sa.price=String(lp)}showSheet(stockOpHtml(),true);break;
     case 'so-pack':readOp();sa.k=v;sa.err='';if(sa.mode==='in'&&isOwner()){const lp=cache.stockcost[sa.id]?.last?.[v];sa.price=lp?String(lp):''}showSheet(stockOpHtml(),true);break;
     case 'so-save':saveOp(v==='scan');break;
     case 'si-addcode':readItem();si.codes.push({c:'',pack:'1',label:''});showSheet(itemFormHtml(),true);break;
@@ -845,21 +872,23 @@ const packText=(p,u)=>p.label?(p.label.replace(/[\s,]/g,'').includes(String(p.pa
 function vStock(){
   const items=stockItems(),q=(ui.sq||'').trim().toLowerCase();
   const shown=q?items.filter(it=>it.name.toLowerCase().includes(q)||packsOf(it).some(p=>p.c.includes(q))):items;
-  const low=items.filter(isLow),mode=ui.smode||'in';
+  const modes=stockModes();if(!modes.includes(ui.smode))ui.smode=modes[0]||'use';
+  const low=items.filter(isLow),mode=ui.smode;
   const lines=cache.count?.lines||{},counted=items.filter(it=>lines[it.id]).length,done=cache.count?.status==='done';
   const total=items.reduce((s,it)=>s+Math.max(0,it.qty)*avgOf(it.id),0);
   return `
   ${isOwner()?`<section class="card tight"><div class="row-head"><h2>มูลค่าสต็อก</h2><span class="v">${money(total)} บาท</span></div>
     <span class="muted small">${items.length} รายการ${low.length?` · ใกล้หมด ${low.length} รายการ`:''} · คิดจากราคาเฉลี่ยที่ซื้อ</span></section>`:''}
-  <section class="card tight">
+  ${isOwner()||canMode('count')?`<section class="card tight">
     <div class="row-head"><h2>นับสต็อก ${esc(thMonth(curMonth()))}</h2>${done?'<span class="chip ok">ปิดการนับแล้ว</span>':`<span class="muted small">${counted}/${items.length}</span>`}</div>
     ${items.length?`<div class="meter" role="img" aria-label="นับแล้ว ${counted} จาก ${items.length}"><div style="width:${items.length?counted/items.length*100:0}%;background:var(--pandan)"></div></div>`:''}
     <span class="muted small">${done?`เจ้าของร้านปิดการนับเดือนนี้แล้ว${isOwner()?'':' ถ้าต้องนับเพิ่ม ให้เจ้าของร้านเปิดอีกครั้ง'}`:'นับเดือนละครั้ง เลือกโหมด "นับสต็อก" แล้วสแกนหรือแตะทีละรายการ'}</span>
     ${isOwner()?`<div class="btns">${done?'<button class="btn sm" data-act="st-reopen">เปิดการนับอีกครั้ง</button>':`<button class="btn sm" data-act="st-close">ปิดการนับเดือนนี้</button>`}<button class="btn sm" data-act="st-history">มูลค่าย้อนหลัง</button><button class="btn sm" data-act="st-csv">ดาวน์โหลด CSV</button></div>`:''}
     ${ui.stClose&&!done?`<div class="credit"><b>ปิดการนับ ${esc(thMonth(curMonth()))}?</b><span class="small">${items.length-counted?`ยังไม่ได้นับ ${items.length-counted} รายการ ระบบจะใช้ยอดในระบบแทน `:''}ระบบจะบันทึกมูลค่าสต็อกสิ้นเดือนไว้ และพนักงานจะนับเพิ่มไม่ได้</span>
       <div class="btns"><button class="btn sm danger" data-act="st-close-yes">ยืนยันปิดการนับ</button><button class="btn sm" data-act="st-close-no">ยกเลิก</button></div></div>`:''}
-  </section>
-  <div class="seg">${Object.entries(SMODE).map(([k,l])=>`<button data-act="st-mode" data-v="${k}" aria-pressed="${mode===k}">${l}</button>`).join('')}</div>
+  </section>`:''}
+  ${modes.length>1?`<div class="seg">${modes.map(k=>`<button data-act="st-mode" data-v="${k}" aria-pressed="${mode===k}">${SMODE[k]}</button>`).join('')}</div>`
+    :`<div class="note">หน้าที่ของคุณ: <b>${SMODE[mode]}</b> สแกนบาร์โค้ดหรือแตะรายการที่หยิบไปใช้</div>`}
   <div class="st-actions"><button class="btn primary" data-act="st-scan">${ICON_SCAN} สแกนบาร์โค้ด</button>${isOwner()?'<button class="btn" data-act="st-new">+ เพิ่มวัตถุดิบ</button>':''}</div>
   <input id="st-q" type="search" placeholder="ค้นหาชื่อหรือรหัสบาร์โค้ด" value="${esc(ui.sq||'')}" autocomplete="off" aria-label="ค้นหาวัตถุดิบ">
   ${low.length&&!q?`<section class="day"><div class="row-head"><h2>ต้องซื้อ</h2><span class="muted small">ต่ำกว่าขั้นต่ำที่ตั้งไว้</span></div>
@@ -883,7 +912,8 @@ const ICON_SCAN='<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d=
 function openStockOp(id,mode,k){
   const it=stockItem(id);if(!it)return;
   const ps=packsOf(it);
-  sa={id,mode:mode||ui.smode||'in',k:k||(ps[0]?.k||''),packs:'',loose:'',price:'',note:'',err:'',moves:null};
+  const modes=stockModes();if(!modes.length)return;mode=mode||ui.smode;if(!modes.includes(mode))mode=modes[0];
+  sa={id,mode,k:k||(ps[0]?.k||''),packs:'',loose:'',price:'',note:'',err:'',moves:null};
   if(sa.mode==='in'&&isOwner()&&sa.k){const lp=cache.stockcost[id]?.last?.[sa.k];if(lp)sa.price=String(lp)}
   showSheet(stockOpHtml());
   loadMoves(id);
@@ -903,7 +933,7 @@ function stockOpHtml(){
     ${isOwner()?ps.filter(x=>lastPrice(it.id,x.k)).map(x=>`<div class="ln"><span>ราคาล่าสุด ${esc(x.label||qfmt(x.pack)+' '+it.unit)}</span><span>${money(+lastPrice(it.id,x.k))} บาท</span></div>`).join(''):''}
     ${+it.min?`<div class="ln"><span>ขั้นต่ำ</span><span>${qfmt(it.min)} ${u}</span></div>`:''}
     ${cache.count?.lines?.[it.id]?`<div class="ln small muted"><span>นับเดือนนี้แล้ว</span><span>${qfmt(cache.count.lines[it.id].c)} ${u}</span></div>`:''}</div>
-  <div class="seg big3">${Object.entries(SMODE).map(([k,l])=>`<button data-act="so-mode" data-v="${k}" aria-pressed="${sa.mode===k}" class="t-${k==='in'?'in':k==='use'?'out':'move'}">${l}</button>`).join('')}</div>
+  ${stockModes().length>1?`<div class="seg big3">${stockModes().map(k=>`<button data-act="so-mode" data-v="${k}" aria-pressed="${sa.mode===k}" class="t-${k==='in'?'in':k==='use'?'out':'move'}">${SMODE[k]}</button>`).join('')}</div>`:''}
   ${locked?`<div class="note">${esc(thMonth(curMonth()))} ปิดการนับแล้ว${isOwner()?' กด "เปิดการนับอีกครั้ง" ในหน้าสต็อกถ้าต้องนับใหม่':''}</div>`:`
   ${ps.length?`<div class="fld"><span>ขนาดห่อ</span><div class="chips">${ps.map(x=>`<button data-act="so-pack" data-v="${esc(x.k)}" aria-pressed="${sa.k===x.k}">${esc(packText(x,it.unit))}</button>`).join('')}<button data-act="so-pack" data-v="" aria-pressed="${!sa.k}">นับเป็น${u}</button></div></div>`:''}
   <div class="two">${p?`<label class="fld"><span>${verb} (ห่อ)</span><input id="so-packs" inputmode="decimal" value="${esc(sa.packs)}" placeholder="0" autocomplete="off"></label>`:''}
@@ -937,6 +967,7 @@ function stockMove(id,t,delta,extra){
 }
 function saveOp(again){
   readOp();const it=stockItem(sa.id);if(!it)return closeSheet();
+  if(!canMode(sa.mode)){sa.err='คุณไม่มีสิทธิ์ทำรายการนี้';return showSheet(stockOpHtml(),true)}
   if(sa.mode==='count'&&!countOpen()){sa.err='เดือนนี้ปิดการนับแล้ว';return showSheet(stockOpHtml(),true)}
   const tot=opTotal(it);
   if(!isFinite(tot)||tot<0){sa.err='ใส่จำนวนเป็นตัวเลข';return showSheet(stockOpHtml(),true)}
@@ -1173,15 +1204,16 @@ function showGate(mode,extra){
   byId('gate').innerHTML=`<div class="gcard">${brand}${body}</div>`;
 }
 function showApp(){byId('gate').hidden=true;byId('app').hidden=false;gateMode=''}
-function stopAll(){if(memberUnsub){memberUnsub();memberUnsub=null}stopData();role=null;canWrite=false;byId('view').innerHTML='';byId('panel').innerHTML=''}
+function stopAll(){if(memberUnsub){memberUnsub();memberUnsub=null}stopData();role=null;perms=null;canWrite=false;byId('view').innerHTML='';byId('panel').innerHTML=''}
 function watchMember(){
   if(memberUnsub)memberUnsub();
   showGate('loading');
   memberUnsub=onSnapshot(doc(fb.db,'members',user.uid),{includeMetadataChanges:true},snap=>{
     if(snap.exists()){
       if(snap.metadata.hasPendingWrites)return; // wait until the server has saved the membership
-      const r=snap.data().role;const first=!role,prev=role;role=r==='owner'?'owner':'staff';canWrite=true;
-      if(first){showApp();subscribe()}else if(prev!==role){closeSheet();subscribe()}render();return;
+      const d=snap.data(),first=!role,prevKey=role+JSON.stringify(perms);
+      role=d.role==='owner'?'owner':'staff';perms=role==='staff'?(d.perms&&typeof d.perms==='object'?d.perms:DEFAULT_PERMS):null;canWrite=true;
+      if(first){showApp();subscribe()}else if(prevKey!==role+JSON.stringify(perms)){closeSheet();subscribe()}render();return;
     }
     if(snap.metadata.fromCache){if(navigator.onLine===false)showGate('offline');return}
     const had=!!role;role=null;canWrite=false;if(had)stopData();
@@ -1197,7 +1229,8 @@ async function resolveAccess(){
     if(inv&&inv.exists()){
       if(!user.emailVerified){showGate('verify',{err:'',info:'',busy:false});return}
       const r=inv.data().role==='owner'?'owner':'staff';
-      await setDoc(doc(fb.db,'members',user.uid),{role:r,email:em,at:serverTimestamp()});
+      const ip=inv.data().perms,mdoc={role:r,email:em,at:serverTimestamp()};if(ip&&typeof ip==='object')mdoc.perms=ip;
+      await setDoc(doc(fb.db,'members',user.uid),mdoc);
       return;
     }
     showGate('denied');

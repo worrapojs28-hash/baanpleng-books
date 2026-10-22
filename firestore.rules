@@ -12,6 +12,10 @@ service cloud.firestore {
     function settingsDoc() { return /databases/$(database)/documents/meta/settings; }
     function closedMonths() { return exists(settingsDoc()) ? get(settingsDoc()).data.get('closed', []) : []; }
     function myEmail() { return request.auth.token.email.lower(); }
+    // หน้าที่ของพนักงาน (เจ้าของร้านทำได้ทุกอย่าง) ถ้าไม่ได้กำหนด = เบิกใช้อย่างเดียว
+    function myPerms() { return get(memberDoc()).data.get('perms', {'stockUse': true}); }
+    function can(p) { return isMember() && (isOwner() || myPerms().get(p, false) == true); }
+    function validPerms(d) { return !('perms' in d) || d.perms.keys().hasOnly(['acct', 'stockIn', 'stockUse', 'stockCount']); }
 
     // เจ้าของร้าน: บัญชีแรกที่กด "ฉันคือเจ้าของร้าน" (ทำได้ครั้งเดียว)
     match /meta/owner {
@@ -23,7 +27,7 @@ service cloud.firestore {
 
     // ชื่อร้าน บัญชีเงิน หมวด ยอดตั้งต้น เดือนที่ปิดงวด
     match /meta/settings {
-      allow read: if isMember();
+      allow read: if can('acct');
       allow write: if isOwner();
     }
 
@@ -40,12 +44,13 @@ service cloud.firestore {
           && request.auth.token.email_verified == true
           && exists(inviteDoc())
           && get(inviteDoc()).data.role == request.resource.data.role
+          && request.resource.data.get('perms', null) == get(inviteDoc()).data.get('perms', null)
           && request.resource.data.email == myEmail())
       );
       // เจ้าของร้านเปลี่ยนสิทธิ์คนอื่นได้ แต่เปลี่ยนของตัวเองหรือของเจ้าของร้านหลักไม่ได้
       allow update: if isOwner() && uid != request.auth.uid && uid != founderUid()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'roleAt', 'roleBy'])
-        && request.resource.data.role in ['owner', 'staff'];
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'roleAt', 'roleBy', 'perms'])
+        && request.resource.data.role in ['owner', 'staff'] && validPerms(request.resource.data);
       allow delete: if isOwner() && uid != request.auth.uid && uid != founderUid();
     }
 
@@ -53,14 +58,14 @@ service cloud.firestore {
     match /invites/{email} {
       allow get: if signedIn() && myEmail() == email;
       allow read, delete: if isOwner();
-      allow create, update: if isOwner() && request.resource.data.role in ['owner', 'staff'];
+      allow create, update: if isOwner() && request.resource.data.role in ['owner', 'staff'] && validPerms(request.resource.data);
     }
 
     // รายการบัญชี เก็บวันละ 1 เอกสาร ชื่อเอกสาร = วันที่ เช่น 2026-10-22
     // เดือนที่ปิดงวดแล้ว เพิ่ม แก้ไข หรือลบไม่ได้
     match /days/{date} {
-      allow read: if isMember();
-      allow create, update: if isMember()
+      allow read: if can('acct');
+      allow create, update: if can('acct')
         && date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && request.resource.data.m is string
         && request.resource.data.m.matches('^[0-9]{4}-[0-9]{2}$')
@@ -73,14 +78,14 @@ service cloud.firestore {
 
     // ลูกค้าและเจ้าหนี้
     match /contacts/{id} {
-      allow read, create, update: if isMember();
+      allow read, create, update: if can('acct');
       allow delete: if isOwner();
     }
 
     // รูปใบเสร็จ
     match /receipts/{id} {
-      allow read: if isMember();
-      allow create: if isMember() && request.resource.data.by == request.auth.uid
+      allow read: if can('acct');
+      allow create: if can('acct') && request.resource.data.by == request.auth.uid
         && request.resource.data.data is string && request.resource.data.data.size() < 1000000;
       allow delete: if isOwner();
     }
@@ -89,8 +94,12 @@ service cloud.firestore {
     match /stock/{id} {
       allow read: if isMember();
       allow create, delete: if isOwner();
+      // พนักงานเปลี่ยนได้แค่จำนวนคงเหลือ: รับเข้า = เพิ่ม, เบิกใช้ = ลด, นับสต็อก = ปรับได้ทั้งสองทาง
       allow update: if isOwner()
-        || (isMember() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['qty', 'upd']));
+        || (isMember() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['qty', 'upd'])
+            && ((can('stockIn') && request.resource.data.qty > resource.data.qty)
+              || (can('stockUse') && request.resource.data.qty < resource.data.qty)
+              || can('stockCount')));
     }
     // ราคาและมูลค่าสต็อก: เจ้าของร้านเท่านั้น
     match /stockcost/{id} {
@@ -102,14 +111,18 @@ service cloud.firestore {
     // ประวัติรับเข้า/เบิกใช้/ปรับจากการนับ: เพิ่มได้อย่างเดียว
     match /stockmoves/{id} {
       allow read: if isMember();
-      allow create: if isMember() && request.resource.data.by == request.auth.uid;
+      allow create: if isMember() && request.resource.data.by == request.auth.uid
+        && (isOwner()
+          || (request.resource.data.t == 'in' && can('stockIn'))
+          || (request.resource.data.t == 'use' && can('stockUse'))
+          || (request.resource.data.t == 'adj' && can('stockCount')));
     }
     // การนับสต็อกรายเดือน: นับได้ระหว่างเปิดอยู่ เจ้าของร้านปิด/เปิดได้
     match /stockcounts/{month} {
       allow read: if isMember();
-      allow create: if isMember() && request.resource.data.status == 'open';
+      allow create: if can('stockCount') && request.resource.data.status == 'open';
       allow update: if isOwner()
-        || (isMember() && resource.data.status == 'open' && request.resource.data.status == 'open');
+        || (can('stockCount') && resource.data.status == 'open' && request.resource.data.status == 'open');
     }
 
     // ประวัติการแก้ไข: เพิ่มได้อย่างเดียว แก้หรือลบไม่ได้ เจ้าของร้านอ่านได้
