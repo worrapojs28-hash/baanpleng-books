@@ -85,6 +85,33 @@ service cloud.firestore {
       allow delete: if isOwner();
     }
 
+    // สต็อกวัตถุดิบ: เจ้าของร้านเพิ่ม/แก้รายการ พนักงานเปลี่ยนได้แค่จำนวนคงเหลือ
+    match /stock/{id} {
+      allow read: if isMember();
+      allow create, delete: if isOwner();
+      allow update: if isOwner()
+        || (isMember() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['qty', 'upd']));
+    }
+    // ราคาและมูลค่าสต็อก: เจ้าของร้านเท่านั้น
+    match /stockcost/{id} {
+      allow read, write: if isOwner();
+    }
+    match /stockvals/{month} {
+      allow read, write: if isOwner();
+    }
+    // ประวัติรับเข้า/เบิกใช้/ปรับจากการนับ: เพิ่มได้อย่างเดียว
+    match /stockmoves/{id} {
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.by == request.auth.uid;
+    }
+    // การนับสต็อกรายเดือน: นับได้ระหว่างเปิดอยู่ เจ้าของร้านปิด/เปิดได้
+    match /stockcounts/{month} {
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.status == 'open';
+      allow update: if isOwner()
+        || (isMember() && resource.data.status == 'open' && request.resource.data.status == 'open');
+    }
+
     // ประวัติการแก้ไข: เพิ่มได้อย่างเดียว แก้หรือลบไม่ได้ เจ้าของร้านอ่านได้
     match /audit/{id} {
       allow create: if isMember() && request.resource.data.uid == request.auth.uid;
