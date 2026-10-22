@@ -210,16 +210,16 @@ function monthNav(){
 }
 function vList(){
   const mk=ui.month,p=pnl(...mRange(mk));
-  const es_=M.entries.filter(e=>monthOf(e.d)===mk&&(ui.filter==='all'||e.t===ui.filter));
+  const es_=M.entries.filter(e=>monthOf(e.d)===mk&&(ui.filter==='all'||e.t===ui.filter)&&(isOwner()||e.t!=='draw'));
   const groups={};for(const e of es_)(groups[e.d]=groups[e.d]||[]).push(e);
   const days=Object.entries(groups);
   return `${monthNav()}
-  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['move','ย้ายเงิน']].map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
-  <div class="sum3"><div><span class="lbl">รายรับ</span><b class="in">${money(p.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(p.C+p.O)}</b></div><div><span class="lbl">กำไร</span><b class="${p.N<0?'neg':''}">${money(p.N)}</b></div></div>
-  ${p.draw?`<div class="note">ถอนเงินเจ้าของเดือนนี้ ${money(p.draw)} บาท (ไม่นับเป็นรายจ่าย)</div>`:''}
+  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||k!=='draw').map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
+  ${isOwner()?`<div class="sum3"><div><span class="lbl">รายรับ</span><b class="in">${money(p.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(p.C+p.O)}</b></div><div><span class="lbl">กำไร</span><b class="${p.N<0?'neg':''}">${money(p.N)}</b></div></div>
+  ${p.draw?`<div class="note">ถอนเงินเจ้าของเดือนนี้ ${money(p.draw)} บาท (ไม่นับเป็นรายจ่าย)</div>`:''}`:''}
   ${days.length?days.map(([d,arr])=>{
     const di=arr.filter(e=>e.t==='in').reduce((s,e)=>s+e.amt,0),dout=arr.filter(e=>e.t==='out').reduce((s,e)=>s+e.amt,0);
-    return `<section class="day"><div class="day-head"><span>${esc(thDay(d))}</span><span><span class="in">+${money(di)}</span> <span class="out">−${money(dout)}</span></span></div><div class="list">${arr.map(rowHtml).join('')}</div></section>`;
+    return `<section class="day"><div class="day-head"><span>${esc(thDay(d))}</span>${isOwner()?`<span><span class="in">+${money(di)}</span> <span class="out">−${money(dout)}</span></span>`:''}</div><div class="list">${arr.map(rowHtml).join('')}</div></section>`;
   }).join(''):`<div class="empty"><b>ไม่มีรายการ</b><p>ยังไม่มี${ui.filter==='all'?'รายการ':TYPE[ui.filter]}ใน${esc(thMonth(mk))}</p></div>`}`;
 }
 function vDebt(){
@@ -418,7 +418,7 @@ function savePay(){
 function openSettings(){
   ss={shop:M.s.shop,accs:M.s.accs.map(a=>({id:a.id,n:a.n,h:!!a.h,open:String(+M.s.open[a.id]||0)})),
     cats:JSON.parse(JSON.stringify(M.s.cats)),newIn:'',newOut:'',newG:'opex',newAcc:'',cdel:null,
-    members:null,invites:null,inviteEmail:'',inviteErr:'',peopleErr:'',rmUid:null,importData:null,importing:''};
+    members:null,invites:null,founder:'',inviteRole:'staff',inviteEmail:'',inviteErr:'',peopleErr:'',rmUid:null,importData:null,importing:''};
   showSheet(setHtml());
   if(isOwner())loadPeople();
 }
@@ -433,23 +433,35 @@ function staffSettingsHtml(){
   <span class="hint">พนักงานบันทึกรายการ รับชำระหนี้ และแก้ไขรายการที่ตัวเองบันทึกได้ ส่วนรายงานกำไรและการตั้งค่าร้านเป็นของเจ้าของร้าน</span>
   <div class="sh-foot"><button class="btn primary" data-act="close">ปิด</button></div>`;
 }
+const ROLE={owner:'เจ้าของร้าน',staff:'พนักงาน'};
 function peopleSection(){
-  if(ss.members===null)return `<div class="fld"><span>ผู้ใช้งาน</span><span class="hint">กำลังโหลดรายชื่อ…</span></div>`;
-  const ms=ss.members||[],inv=(ss.invites||[]).filter(i=>!ms.some(m=>(m.email||'')===i.id));
-  return `<div class="fld"><span>ผู้ใช้งาน</span>
+  if(ss.members===null)return `<div class="fld"><span>ผู้ใช้งานและสิทธิ์</span><span class="hint">กำลังโหลดรายชื่อ…</span></div>`;
+  const ms=(ss.members||[]).slice().sort((a,b)=>(a.id===ss.founder?-1:b.id===ss.founder?1:0)||(a.role===b.role?0:a.role==='owner'?-1:1)),
+    inv=(ss.invites||[]).filter(i=>!ms.some(m=>(m.email||'')===i.id));
+  const row=m=>{
+    const locked=m.id===user.uid||m.id===ss.founder;
+    const note=m.id===ss.founder?'เจ้าของร้านหลัก':'';
+    return `<div class="drow"><div class="main"><span class="t">${esc(m.email||'ไม่มีอีเมล')}</span>
+      <span class="s">${locked?`<span class="chip ${m.role==='owner'?'ok':'warn'}">${ROLE[m.role]||m.role}</span>`:''}${[note,m.id===user.uid?'คุณ':''].filter(Boolean).map(esc).join(' · ')}</span></div>
+      ${locked?'':`<select id="s-role-${esc(m.id)}" data-uid="${esc(m.id)}" aria-label="สิทธิ์ของ ${esc(m.email||'')}">${['owner','staff'].map(r=>`<option value="${r}" ${m.role===r?'selected':''}>${ROLE[r]}</option>`).join('')}</select>
+        ${ss.rmUid===m.id?`<button class="btn sm danger" data-act="p-rm-yes" data-v="${esc(m.id)}">ยืนยันเอาออก</button>`:`<button class="btn sm" data-act="p-rm" data-v="${esc(m.id)}">เอาออก</button>`}`}</div>`;
+  };
+  return `<div class="fld"><span>ผู้ใช้งานและสิทธิ์</span>
     ${ss.peopleErr?`<span class="hint">${esc(ss.peopleErr)}</span>`:''}
-    <div class="list">${ms.map(m=>`<div class="drow"><div class="main"><span class="t">${esc(m.email||'ไม่มีอีเมล')}</span><span class="s">${m.role==='owner'?'เจ้าของร้าน':'พนักงาน'}${m.id===user.uid?' · คุณ':''}</span></div>
-      ${m.role==='owner'?'':ss.rmUid===m.id?`<button class="btn sm danger" data-act="p-rm-yes" data-v="${esc(m.id)}">ยืนยันเอาออก</button>`:`<button class="btn sm" data-act="p-rm" data-v="${esc(m.id)}">เอาออก</button>`}</div>`).join('')}
-    ${inv.map(i=>`<div class="drow"><div class="main"><span class="t">${esc(i.id)}</span><span class="s"><span class="chip warn">รอเข้าใช้งาน</span></span></div><button class="btn sm" data-act="p-uninvite" data-v="${esc(i.id)}">ยกเลิก</button></div>`).join('')}</div>
-    <div class="addrow"><input id="s-invite" type="email" inputmode="email" autocomplete="off" placeholder="อีเมลพนักงาน" value="${esc(ss.inviteEmail||'')}"><button class="btn sm" data-act="p-invite">เชิญพนักงาน</button></div>
+    <div class="list">${ms.map(row).join('')}
+    ${inv.map(i=>`<div class="drow"><div class="main"><span class="t">${esc(i.id)}</span><span class="s"><span class="chip warn">รอเข้าใช้งาน</span><span>${ROLE[i.role]||'พนักงาน'}</span></span></div><button class="btn sm" data-act="p-uninvite" data-v="${esc(i.id)}">ยกเลิก</button></div>`).join('')}</div>
+    <div class="addrow"><input id="s-invite" type="email" inputmode="email" autocomplete="off" placeholder="อีเมลที่จะเชิญ" value="${esc(ss.inviteEmail||'')}">
+      <select id="s-invite-role" aria-label="สิทธิ์ของคนที่เชิญ">${['staff','owner'].map(r=>`<option value="${r}" ${(ss.inviteRole||'staff')===r?'selected':''}>${ROLE[r]}</option>`).join('')}</select>
+      <button class="btn sm" data-act="p-invite">เชิญ</button></div>
     ${ss.inviteErr?`<div class="err" style="margin-top:0">${esc(ss.inviteErr)}</div>`:''}
-    <span class="hint">พนักงานเปิดแอป สมัครด้วยอีเมลนี้ และกดยืนยันอีเมล ก็เข้าใช้งานได้ พนักงานไม่เห็นยอดเงินคงเหลือ กำไร และรายงาน</span></div>`;
+    <div class="note"><b>เจ้าของร้าน</b> เห็นทุกอย่าง ทั้งยอดเงิน กำไร รายงาน ตั้งค่า และจัดการผู้ใช้<br><b>พนักงาน</b> บันทึกรายรับรายจ่าย รับชำระหนี้ และแก้ไขรายการของตัวเองได้ ไม่เห็นยอดเงินคงเหลือ กำไร รายงาน และการถอนเงินเจ้าของ</div>
+    <span class="hint">คนที่ได้รับเชิญเปิดแอป สมัครด้วยอีเมลนี้ และกดยืนยันอีเมล ก็เข้าใช้งานได้ · เปลี่ยนสิทธิ์มีผลทันที · เจ้าของร้านหลักเปลี่ยนสิทธิ์หรือเอาออกไม่ได้</span></div>`;
 }
 function dataSection(){
   const d=ss.importData;
   return `<div class="fld"><span>ข้อมูลและไฟล์สำรอง</span>
     <div class="btns"><button class="btn sm" data-act="audit">ดูประวัติการแก้ไข</button><button class="btn sm" data-act="backup">ดาวน์โหลดไฟล์สำรอง</button>
-    <label class="btn sm filebtn">นำเข้าจากไฟล์สำรอง<input type="file" id="s-import" accept=".json,application/json" hidden></label></div>
+    <label class="btn sm filebtn">นำเข้าจากไฟล์สำรอง<input type="file" id="s-import" class="vh" accept=".json,application/json"></label></div>
     ${ss.importing?`<div class="note">${esc(ss.importing)}</div>`:d?`<div class="credit"><b>พร้อมนำเข้า: ${Object.keys(d.days||{}).length} วัน · ${Object.values(d.days||{}).reduce((s,x)=>s+Object.keys(x.entries||{}).length,0)} รายการ</b>
       <span class="small">ข้อมูลวันที่ตรงกันจะถูกแทนที่ด้วยข้อมูลจากไฟล์ และการตั้งค่าร้านจะใช้ตามไฟล์</span>
       <div class="btns"><button class="btn sm danger" data-act="import-yes">ยืนยันนำเข้า</button><button class="btn sm" data-act="import-no">ยกเลิก</button></div></div>`:''}
@@ -470,6 +482,7 @@ function readSet(){
   if(g('s-newin'))ss.newIn=g('s-newin').value;if(g('s-newout'))ss.newOut=g('s-newout').value;if(g('s-newg'))ss.newG=g('s-newg').value;
   if(g('s-newacc'))ss.newAcc=g('s-newacc').value;
   if(g('s-invite'))ss.inviteEmail=g('s-invite').value;
+  if(g('s-invite-role'))ss.inviteRole=g('s-invite-role').value;
 }
 function setHtml(err){
   if(!isOwner())return staffSettingsHtml();
@@ -635,18 +648,20 @@ async function runImport(data){
 /* ---------- people and history (owner) ---------- */
 async function loadPeople(){
   try{
-    const[m,i]=await Promise.all([getDocs(collection(fb.db,'members')),getDocs(collection(fb.db,'invites'))]);
+    const[m,i,o]=await Promise.all([getDocs(collection(fb.db,'members')),getDocs(collection(fb.db,'invites')),getDoc(doc(fb.db,'meta','owner'))]);
     if(!ss)return;
+    ss.founder=o.exists()?o.data().uid:'';
     ss.members=m.docs.map(d=>({id:d.id,...d.data()}));ss.invites=i.docs.map(d=>({id:d.id,...d.data()}));rerS();
   }catch(e){if(ss){ss.members=[];ss.invites=[];ss.peopleErr='โหลดรายชื่อไม่ได้ ต้องต่ออินเทอร์เน็ต';rerS()}}
 }
-const ACT={add:'เพิ่ม',edit:'แก้ไข',delete:'ลบ',pay:'ชำระหนี้',settings:'ตั้งค่า',import:'นำเข้าข้อมูล'};
+const ACT={add:'เพิ่ม',edit:'แก้ไข',delete:'ลบ',pay:'ชำระหนี้',settings:'ตั้งค่า',import:'นำเข้าข้อมูล',role:'เปลี่ยนสิทธิ์',invite:'เชิญผู้ใช้',remove:'เอาผู้ใช้ออก'};
 async function openAudit(){
   showSheet(`<div class="sh-head"><h2>ประวัติการแก้ไข</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div><div class="empty"><b>กำลังโหลด</b></div>`);
   try{
     const s=await getDocs(query(collection(fb.db,'audit'),orderBy('ts','desc'),limit(150)));
     const rows=s.docs.map(d=>d.data());
-    const desc=a=>{const v=a.after&&!a.after.del&&a.after.t?a.after:a.before||{};
+    const desc=a=>{if(a.act==='role'||a.act==='invite'||a.act==='remove')return [a.after?.email||a.before?.email,a.after?.role?ROLE[a.after.role]:''].filter(Boolean).join(' → ');
+      const v=a.after&&!a.after.del&&a.after.t?a.after:a.before||{};
       return [v.t?TYPE[v.t]:'',v.t==='move'?`${accName(v.acc)} → ${accName(v.to)}`:v.cat,v.amt!=null?money(+v.amt)+' บาท':'',v.note].filter(Boolean).join(' · ')};
     showSheet(`<div class="sh-head"><h2>ประวัติการแก้ไข</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
       <span class="hint">150 รายการล่าสุด ทุกการเพิ่ม แก้ไข และลบ ถูกบันทึกไว้และแก้ย้อนหลังไม่ได้</span>
@@ -686,14 +701,15 @@ document.addEventListener('click',ev=>{
     case 'rc-view':readEntry();viewReceipt(v);break;
     case 'rc-back':if(es)rerE();else closeSheet();break;
     case 'rc-remove':readEntry();es.rcData='';es.rc='';es.rcDrop=true;rerE();break;
-    case 'p-invite':{readSet();const em=(ss.inviteEmail||'').trim().toLowerCase();
+    case 'p-invite':{readSet();const em=(ss.inviteEmail||'').trim().toLowerCase(),irole=ss.inviteRole==='owner'?'owner':'staff';
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ss.inviteErr='ใส่อีเมลให้ถูกต้อง';rerS();break}
       if((ss.members||[]).some(m=>m.email===em)){ss.inviteErr='อีเมลนี้เป็นผู้ใช้งานอยู่แล้ว';rerS();break}
-      ss.inviteErr='';ss.inviteEmail='';ss.invites=[...(ss.invites||[]).filter(i=>i.id!==em),{id:em,role:'staff'}];
-      fire(setDoc(doc(fb.db,'invites',em),{role:'staff',by:user.uid,at:serverTimestamp()}),'invite');rerS();toast(`เชิญ ${em} แล้ว`);break}
+      ss.inviteErr='';ss.inviteEmail='';ss.invites=[...(ss.invites||[]).filter(i=>i.id!==em),{id:em,role:irole}];
+      fire(setDoc(doc(fb.db,'invites',em),{role:irole,by:user.uid,at:serverTimestamp()}),'invite');audit('invite','','',null,{email:em,role:irole});
+      rerS();toast(`เชิญ ${em} เป็น${ROLE[irole]}แล้ว`);break}
     case 'p-uninvite':readSet();fire(deleteDoc(doc(fb.db,'invites',v)),'uninvite');ss.invites=(ss.invites||[]).filter(i=>i.id!==v);rerS();break;
     case 'p-rm':readSet();ss.rmUid=v;rerS();break;
-    case 'p-rm-yes':{readSet();const m=(ss.members||[]).find(x=>x.id===v);fire(deleteDoc(doc(fb.db,'members',v)),'rm');
+    case 'p-rm-yes':{readSet();const m=(ss.members||[]).find(x=>x.id===v);fire(deleteDoc(doc(fb.db,'members',v)),'rm');audit('remove','','',{email:m?.email||'',role:m?.role||''},null);
       if(m?.email)fire(deleteDoc(doc(fb.db,'invites',m.email)),'rm-inv');ss.members=(ss.members||[]).filter(x=>x.id!==v);ss.rmUid=null;rerS();toast('เอาผู้ใช้ออกแล้ว');break}
     case 'audit':openAudit();break;
     case 'backup':exportBackup();break;
@@ -736,6 +752,14 @@ document.addEventListener('change',async ev=>{
     try{const d=await compressImage(f);if(!d){toast('รูปใหญ่เกินไป ลองถ่ายใหม่');return}if(!es)return;es.rcData=d;es.rcDrop=false;rerE()}
     catch(e){toast('เปิดรูปไม่ได้ ลองเลือกรูปอื่น')}
   }
+  if(t.dataset?.uid&&ss&&t.id.startsWith('s-role-')){
+    readSet();const uid=t.dataset.uid,r=t.value==='owner'?'owner':'staff',m=(ss.members||[]).find(x=>x.id===uid);
+    if(!m||m.role===r)return;
+    fire(setDoc(doc(fb.db,'members',uid),{role:r,roleAt:serverTimestamp(),roleBy:user.uid},{merge:true}),'role');
+    audit('role','','',{email:m.email||'',role:m.role},{email:m.email||'',role:r});
+    m.role=r;rerS();toast(`เปลี่ยน ${m.email||'ผู้ใช้'} เป็น${ROLE[r]}แล้ว`);return;
+  }
+  if(t.id==='s-invite-role'&&ss){readSet();return}
   if(t.id==='s-import'&&t.files?.[0]&&ss){
     readSet();
     try{const data=JSON.parse(await t.files[0].text());if(data?.format!=='baanpleng-books'||!data.days)throw 0;ss.importData=data;rerS()}
@@ -806,7 +830,8 @@ async function resolveAccess(){
     const inv=em?await getDoc(doc(fb.db,'invites',em)):null;
     if(inv&&inv.exists()){
       if(!user.emailVerified){showGate('verify',{err:'',info:'',busy:false});return}
-      await setDoc(doc(fb.db,'members',user.uid),{role:'staff',email:em,at:serverTimestamp()});
+      const r=inv.data().role==='owner'?'owner':'staff';
+      await setDoc(doc(fb.db,'members',user.uid),{role:r,email:em,at:serverTimestamp()});
       return;
     }
     showGate('denied');

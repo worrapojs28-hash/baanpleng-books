@@ -27,26 +27,33 @@ service cloud.firestore {
       allow write: if isOwner();
     }
 
-    // ผู้ใช้งาน: เจ้าของร้าน 1 คน + พนักงานที่ได้รับเชิญ
+    // ผู้ใช้งาน: เจ้าของร้านหลัก + เจ้าของร้านหรือพนักงานที่ได้รับเชิญ
+    function founderUid() { return get(/databases/$(database)/documents/meta/owner).data.uid; }
+    function inviteDoc() { return /databases/$(database)/documents/invites/$(myEmail()); }
     match /members/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow read: if isOwner();
       allow create: if signedIn() && request.auth.uid == uid && (
         (request.resource.data.role == 'owner'
           && getAfter(/databases/$(database)/documents/meta/owner).data.uid == request.auth.uid)
-        || (request.resource.data.role == 'staff'
+        || (request.resource.data.role in ['owner', 'staff']
           && request.auth.token.email_verified == true
-          && exists(/databases/$(database)/documents/invites/$(myEmail()))
+          && exists(inviteDoc())
+          && get(inviteDoc()).data.role == request.resource.data.role
           && request.resource.data.email == myEmail())
       );
-      allow update: if false;
-      allow delete: if isOwner() && uid != request.auth.uid;
+      // เจ้าของร้านเปลี่ยนสิทธิ์คนอื่นได้ แต่เปลี่ยนของตัวเองหรือของเจ้าของร้านหลักไม่ได้
+      allow update: if isOwner() && uid != request.auth.uid && uid != founderUid()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'roleAt', 'roleBy'])
+        && request.resource.data.role in ['owner', 'staff'];
+      allow delete: if isOwner() && uid != request.auth.uid && uid != founderUid();
     }
 
-    // คำเชิญพนักงาน (ชื่อเอกสาร = อีเมลตัวพิมพ์เล็ก)
+    // คำเชิญ (ชื่อเอกสาร = อีเมลตัวพิมพ์เล็ก)
     match /invites/{email} {
       allow get: if signedIn() && myEmail() == email;
-      allow read, write: if isOwner();
+      allow read, delete: if isOwner();
+      allow create, update: if isOwner() && request.resource.data.role in ['owner', 'staff'];
     }
 
     // รายการบัญชี เก็บวันละ 1 เอกสาร ชื่อเอกสาร = วันที่ เช่น 2026-10-22
