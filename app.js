@@ -754,7 +754,7 @@ let gate={mode:'signin',email:'',err:'',busy:false,info:''};
 function showGate(mode,extra){
   gateMode=mode;if(extra)Object.assign(gate,extra);
   byId('app').hidden=true;byId('fab').hidden=true;byId('gate').hidden=false;closeSheet();
-  const brand=`<div class="g-brand"><img src="icons/icon-192.png" alt="" width="56" height="56"><div><b>บัญชีขนมบ้านเพลง</b><span>บัญชีรายรับ-รายจ่ายของร้าน</span></div></div>`;
+  const brand=`<div class="g-brand"><img src="icons/icon-192.png" alt="โลโก้ขนมบ้านเพลง" width="96" height="96"><div><b>บัญชีขนมบ้านเพลง</b><span>บัญชีรายรับ-รายจ่ายของร้าน</span></div></div>`;
   const out=`<button class="link" data-act="signout">ออกจากระบบ</button>`;
   let body='';
   if(mode==='setup')body=`<h2>ยังไม่ได้เชื่อม Firebase</h2><p>ใส่ค่าใน firebase-config.js ก่อนใช้งาน</p>`;
