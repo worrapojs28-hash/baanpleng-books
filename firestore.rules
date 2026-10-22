@@ -1,0 +1,87 @@
+rules_version = '2';
+
+// กฎความปลอดภัยของฐานข้อมูลบัญชีขนมบ้านเพลง
+// วางทั้งหมดนี้ใน Firebase Console > Firestore Database > Rules แล้วกด Publish
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function memberDoc() { return /databases/$(database)/documents/members/$(request.auth.uid); }
+    function isMember() { return signedIn() && exists(memberDoc()); }
+    function isOwner() { return isMember() && get(memberDoc()).data.role == 'owner'; }
+    function settingsDoc() { return /databases/$(database)/documents/meta/settings; }
+    function closedMonths() { return exists(settingsDoc()) ? get(settingsDoc()).data.get('closed', []) : []; }
+    function myEmail() { return request.auth.token.email.lower(); }
+
+    // เจ้าของร้าน: บัญชีแรกที่กด "ฉันคือเจ้าของร้าน" (ทำได้ครั้งเดียว)
+    match /meta/owner {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/meta/owner)
+        && request.resource.data.uid == request.auth.uid;
+    }
+
+    // ชื่อร้าน บัญชีเงิน หมวด ยอดตั้งต้น เดือนที่ปิดงวด
+    match /meta/settings {
+      allow read: if isMember();
+      allow write: if isOwner();
+    }
+
+    // ผู้ใช้งาน: เจ้าของร้าน 1 คน + พนักงานที่ได้รับเชิญ
+    match /members/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow read: if isOwner();
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (request.resource.data.role == 'owner'
+          && getAfter(/databases/$(database)/documents/meta/owner).data.uid == request.auth.uid)
+        || (request.resource.data.role == 'staff'
+          && request.auth.token.email_verified == true
+          && exists(/databases/$(database)/documents/invites/$(myEmail()))
+          && request.resource.data.email == myEmail())
+      );
+      allow update: if false;
+      allow delete: if isOwner() && uid != request.auth.uid;
+    }
+
+    // คำเชิญพนักงาน (ชื่อเอกสาร = อีเมลตัวพิมพ์เล็ก)
+    match /invites/{email} {
+      allow get: if signedIn() && myEmail() == email;
+      allow read, write: if isOwner();
+    }
+
+    // รายการบัญชี เก็บวันละ 1 เอกสาร ชื่อเอกสาร = วันที่ เช่น 2026-10-22
+    // เดือนที่ปิดงวดแล้ว เพิ่ม แก้ไข หรือลบไม่ได้
+    match /days/{date} {
+      allow read: if isMember();
+      allow create, update: if isMember()
+        && date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.m is string
+        && request.resource.data.m.matches('^[0-9]{4}-[0-9]{2}$')
+        && date.matches(request.resource.data.m + '-[0-9]{2}')
+        && request.resource.data.d == date
+        && !(request.resource.data.m in closedMonths())
+        && (resource == null || !(resource.data.m in closedMonths()));
+      allow delete: if false;
+    }
+
+    // ลูกค้าและเจ้าหนี้
+    match /contacts/{id} {
+      allow read, create, update: if isMember();
+      allow delete: if isOwner();
+    }
+
+    // รูปใบเสร็จ
+    match /receipts/{id} {
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.by == request.auth.uid
+        && request.resource.data.data is string && request.resource.data.data.size() < 1000000;
+      allow delete: if isOwner();
+    }
+
+    // ประวัติการแก้ไข: เพิ่มได้อย่างเดียว แก้หรือลบไม่ได้ เจ้าของร้านอ่านได้
+    match /audit/{id} {
+      allow create: if isMember() && request.resource.data.uid == request.auth.uid;
+      allow read: if isOwner();
+    }
+  }
+}
