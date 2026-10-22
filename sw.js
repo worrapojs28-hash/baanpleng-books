@@ -1,6 +1,6 @@
 // Keeps the app itself on the phone so it opens without internet.
 // Shop data is kept offline separately by Firestore.
-const VERSION = 'bp-2026-10-22-1';
+const VERSION = 'bp-2026-10-22-2';
 const FB = 'https://www.gstatic.com/firebasejs/12.19.0/';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './firebase-config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];

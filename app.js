@@ -537,14 +537,20 @@ function enqueue(op,go=true){
   fire(setDoc(ref,plain(op.patch),{merge:true}),op.k);
   if(go)render();
 }
+let subRetry=0;
 function subscribe(){
   unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];
   const meta={};
   const upd=(k,m)=>{meta[k]=m;pending=Object.values(meta).some(x=>x.hasPendingWrites);fromCache=Object.values(meta).some(x=>x.fromCache)};
-  const onErr=e=>{console.error(e);if(e?.code==='permission-denied')toast('บัญชีนี้ไม่มีสิทธิ์อ่านข้อมูลร้าน')};
+  const onErr=e=>{console.error(e);
+    if(e?.code==='permission-denied'&&role){
+      // membership may still be saving on the server: try again a few times before giving up
+      subRetry++;if(subRetry<=5){setTimeout(()=>{if(role)subscribe()},1500*subRetry);return}
+      toast('บัญชีนี้ไม่มีสิทธิ์อ่านข้อมูลร้าน');return}
+    if(e?.code==='unavailable'&&role)setTimeout(()=>{if(role)subscribe()},5000)};
   unsubs.push(onSnapshot(collection(fb.db,'days'),{includeMetadataChanges:true},snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.days[ch.doc.id];else cache.days[ch.doc.id]=ch.doc.data()}
-    upd('days',snap.metadata);if(!snap.metadata.fromCache||snap.size)loaded=true;schedule();
+    upd('days',snap.metadata);if(!snap.metadata.fromCache||snap.size)loaded=true;if(!snap.metadata.fromCache)subRetry=0;schedule();
   },onErr));
   unsubs.push(onSnapshot(collection(fb.db,'contacts'),{includeMetadataChanges:true},snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.contacts[ch.doc.id];else cache.contacts[ch.doc.id]=ch.doc.data()}
@@ -783,6 +789,7 @@ function watchMember(){
   showGate('loading');
   memberUnsub=onSnapshot(doc(fb.db,'members',user.uid),{includeMetadataChanges:true},snap=>{
     if(snap.exists()){
+      if(snap.metadata.hasPendingWrites)return; // wait until the server has saved the membership
       const r=snap.data().role;const first=!role;role=r==='owner'?'owner':'staff';canWrite=true;
       if(first){showApp();subscribe()}render();return;
     }
