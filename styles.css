@@ -198,6 +198,9 @@ input,select{font-size:16px}
 .scanline{position:absolute;left:8%;right:8%;top:50%;height:2px;background:#e5484d;opacity:.9}
 .codebox{border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
 .rem .small{font-weight:400}
+.qty-row{display:grid;grid-template-columns:56px minmax(0,1fr) 56px;gap:8px;align-items:stretch}
+.qty-row input{text-align:center}
+.qbtn{font-size:26px;line-height:1;padding:0}
 .pchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .pchip{padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;color:var(--muted)}
 .pchip[aria-pressed="true"]{background:var(--pandan-soft);color:var(--pandan);border-color:transparent;font-weight:500}

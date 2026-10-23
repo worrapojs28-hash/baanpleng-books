@@ -776,8 +776,10 @@ document.addEventListener('click',ev=>{
     case 'st-reopen':fire(setDoc(doc(fb.db,'stockcounts',curMonth()),{m:curMonth(),status:'open'},{merge:true}),'count');audit('stock-reopen','','',null,{m:curMonth()});toast('เปิดการนับอีกครั้งแล้ว');break;
     case 'st-history':openStockHistory();break;
     case 'st-csv':exportStockCsv();break;
-    case 'so-mode':if(!canMode(v))break;readOp();sa.mode=v;sa.err='';if(v==='in'&&isOwner()&&sa.k&&!sa.price){const lp=cache.stockcost[sa.id]?.last?.[sa.k];if(lp)sa.price=String(lp)}showSheet(stockOpHtml(),true);break;
-    case 'so-pack':readOp();sa.k=v;sa.err='';if(sa.mode==='in'&&isOwner()){const lp=cache.stockcost[sa.id]?.last?.[v];sa.price=lp?String(lp):''}showSheet(stockOpHtml(),true);break;
+    case 'so-mode':if(!canMode(v))break;readOp();if(v==='count'&&sa.mode!=='count')sa.qty='';else if(v!=='count'&&sa.mode==='count'&&sa.qty==='')sa.qty='1';sa.mode=v;sa.err='';if(v==='in'&&!sa.price)prefillPrice();showSheet(stockOpHtml(),true);break;
+    case 'so-pack':readOp();sa.k=v;sa.err='';prefillPrice();showSheet(stockOpHtml(),true);break;
+    case 'so-inc':case 'so-dec':{readOp();const n=numx(sa.qty===''?'0':sa.qty)||0;sa.qty=String(Math.max(0,r2((n+(a==='so-inc'?1:-1))*1000)/1000));sa.err='';showSheet(stockOpHtml(),true);break}
+    case 'si-convert':convertItem();break;
     case 'so-save':saveOp(v==='scan');break;
     case 'si-addcode':readItem();si.codes.push({c:'',pack:'1',label:''});showSheet(itemFormHtml(),true);break;
     case 'si-rmcode':readItem();si.codes.splice(+v,1);showSheet(itemFormHtml(),true);break;
@@ -830,7 +832,7 @@ document.addEventListener('change',async ev=>{
     m.role=r;rerS();toast(`เปลี่ยน ${m.email||'ผู้ใช้'} เป็น${ROLE[r]}แล้ว`);return;
   }
   if(t.id==='s-invite-role'&&ss){readSet();return}
-  if((t.id==='si-unit'||t.id==='si-link')&&si){readItem();showSheet(itemFormHtml(),true);return}
+  if((t.id==='si-unit'||t.id==='si-link'||t.id==='si-cunit')&&si){readItem();showSheet(itemFormHtml(),true);return}
   if(t.id==='s-import'&&t.files?.[0]&&ss){
     readSet();
     try{const data=JSON.parse(await t.files[0].text());if(data?.format!=='baanpleng-books'||!data.days)throw 0;ss.importData=data;rerS()}
@@ -841,19 +843,20 @@ document.addEventListener('submit',ev=>{if(ev.target.id==='authform'){ev.prevent
   if(ev.target.id==='scan-form'){ev.preventDefault();const c=(byId('scan-code')?.value||'').trim();if(c)gotCode(c)}});
 document.addEventListener('input',ev=>{const t=ev.target;
   if(t.id==='st-q'){ui.sq=t.value;render();return}
-  if(sa&&(t.id==='so-packs'||t.id==='so-loose'||t.id==='so-price')){readOp();showSheet(stockOpHtml(),true)}
+  if(sa&&(t.id==='so-qty'||t.id==='so-price')){readOp();showSheet(stockOpHtml(),true)}
   if(si&&/^si-[pr]-\d+$/.test(t.id)){readItem();showSheet(itemFormHtml(),true)}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScan()});
 
 /* ---------- stock: items, barcodes, receive / use / monthly count ---------- */
-const SUNITS=['กรัม','กก.','มล.','ลิตร','ชิ้น','ฟอง','ใบ','ถุง','แพ็ก','ขวด','กล่อง','กระป๋อง','ม้วน'];
+const SUNITS=['กล่อง','ถุง','ขวด','แพ็ก','กระป๋อง','ก้อน','ชิ้น','ฟอง','แผง','ใบ','ม้วน','กรัม','กก.','มล.','ลิตร'];
 const SCATS=['วัตถุดิบ','นม เนย ไข่','กาแฟและเครื่องดื่ม','บรรจุภัณฑ์','อื่น ๆ'];
 const SMODE={in:'รับเข้า',use:'เบิกใช้',count:'นับสต็อก'};
-const SMOVE={in:'รับเข้า',use:'เบิกใช้',adj:'ปรับจากการนับ',init:'ยอดเริ่มต้น'};
+const SMOVE={in:'รับเข้า',use:'เบิกใช้',adj:'ปรับจากการนับ',init:'ยอดเริ่มต้น',conv:'เปลี่ยนหน่วยนับ'};
 let sa=null,si=null,scanner=null,zxP=null;
 // stock numbers keep more precision than money (price per gram, 0.5 egg)
 const numx=v=>{const n=parseFloat(String(v??'').replace(/[,\s฿]/g,''));return isFinite(n)?Math.round(n*1e6)/1e6:NaN};
 const pfmt=n=>(+n||0).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:4});
+const r4=n=>Math.round((+n||0)*10000)/10000;
 const qfmt=n=>(+n||0).toLocaleString('th-TH',{maximumFractionDigits:3});
 const codeKey=c=>'b'+String(c).replace(/[^A-Za-z0-9_-]/g,ch=>'_'+ch.charCodeAt(0));
 const stockItems=()=>Object.entries(cache.stock).filter(([,v])=>v&&!v.off&&v.name).map(([id,v])=>({...v,id,qty:+v.qty||0})).sort((a,b)=>a.name.localeCompare(b.name,'th'));
@@ -867,20 +870,9 @@ const avgOf=id=>+(cache.stockcost[id]?.avg)||0;
 const isLow=it=>(+it.min||0)>0&&it.qty<=+it.min;
 const curMonth=()=>monthOf(todayKey());
 const countOpen=()=>!cache.count||cache.count.status!=='done';
-// unique display names per barcode: same name → add the last 4 digits of the barcode
-function packNames(it){const ps=packsOf(it),base=p=>p.label||`${qfmt(p.pack)} ${it.unit}`,cnt={};
-  ps.forEach(p=>{const b=base(p);cnt[b]=(cnt[b]||0)+1});const o={};ps.forEach(p=>{const b=base(p);o[p.k]=cnt[b]>1?`${b} …${p.c.slice(-4)}`:b});return o}
-const withSize=(name,pack,u)=>name.replace(/[\s,]/g,'').includes(String(pack))?name:`${name} · ${qfmt(pack)} ${u}`;
-// pack buttons: when receiving with a price (owner) each barcode/brand is its own button;
-// otherwise only the size matters, so barcodes with the same size share one button
-function packChoices(it,mode){
-  const ps=packsOf(it);
-  if(mode==='in'&&isOwner()){const nm=packNames(it);return ps.map(p=>({k:p.k,text:withSize(nm[p.k],p.pack,it.unit),on:x=>!!x&&x.k===p.k}))}
-  const by=new Map();for(const p of ps){if(!by.has(p.pack))by.set(p.pack,[]);by.get(p.pack).push(p)}
-  return [...by.entries()].sort((a,b)=>a[0]-b[0]).map(([pack,g])=>{const labels=[...new Set(g.map(x=>x.label).filter(Boolean))];
-    return {k:g[0].k,text:labels.length===1?withSize(labels[0],pack,it.unit):`ห่อละ ${qfmt(pack)} ${it.unit}`,on:x=>!!x&&x.pack===pack}});
-}
-const packText=(p,u)=>p.label?(p.label.replace(/[\s,]/g,'').includes(String(p.pack))?p.label:`${p.label} · ${qfmt(p.pack)} ${u}`):`1 ห่อ = ${qfmt(p.pack)} ${u}`;
+// brand name per barcode: its label, or the last 4 digits; repeated labels also get the digits
+function packNames(it){const ps=packsOf(it),cnt={};ps.forEach(p=>{if(p.label)cnt[p.label]=(cnt[p.label]||0)+1});
+  const o={};ps.forEach(p=>{o[p.k]=!p.label?`บาร์โค้ด …${p.c.slice(-4)}`:cnt[p.label]>1?`${p.label} …${p.c.slice(-4)}`:p.label});return o}
 
 function vStock(){
   const items=stockItems(),q=(ui.sq||'').trim().toLowerCase();
@@ -921,40 +913,49 @@ function stockListHtml(shown,lines){
 }
 const ICON_SCAN='<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>';
 
-/* operation sheet: receive / use / count one item */
+/* operation sheet: receive / use / count one item. Every barcode = 1 unit of the item. */
+const legacyPacks=it=>packsOf(it).filter(p=>p.pack!==1);
 function openStockOp(id,mode,k){
   const it=stockItem(id);if(!it)return;
   const ps=packsOf(it);
   const modes=stockModes();if(!modes.length)return;mode=mode||ui.smode;if(!modes.includes(mode))mode=modes[0];
-  sa={id,mode,k:k||(ps[0]?.k||''),packs:'',loose:'',price:'',note:'',err:'',moves:null};
-  if(sa.mode==='in'&&isOwner()&&sa.k){const lp=cache.stockcost[id]?.last?.[sa.k];if(lp)sa.price=String(lp)}
+  sa={id,mode,k:k||(ps[0]?.k||''),scanned:!!k,qty:mode==='count'?'':'1',price:'',note:'',err:'',moves:null};
+  prefillPrice();
   showSheet(stockOpHtml());
   loadMoves(id);
 }
-function readOp(){const g=x=>byId(x);if(!sa)return;if(g('so-packs'))sa.packs=g('so-packs').value;if(g('so-loose'))sa.loose=g('so-loose').value;if(g('so-price'))sa.price=g('so-price').value;if(g('so-note'))sa.note=g('so-note').value}
-function opTotal(it){const p=packsOf(it).find(x=>x.k===sa.k);const n=numx(sa.packs||'0'),l=numx(sa.loose||'0');if(!isFinite(n)||!isFinite(l))return NaN;return r2(((p?p.pack:0)*n+l)*1000)/1000}
+function prefillPrice(){
+  if(!sa||sa.mode!=='in'||!isOwner())return;
+  const it=stockItem(sa.id),p=packsOf(it).find(x=>x.k===sa.k);
+  const lp=p&&p.pack===1?lastPrice(sa.id,p.k):'';
+  sa.price=lp||(avgOf(sa.id)&&!legacyPacks(it).length?String(r2(avgOf(sa.id)*100)/100):'');
+}
+function readOp(){const g=x=>byId(x);if(!sa)return;if(g('so-qty'))sa.qty=g('so-qty').value;if(g('so-price'))sa.price=g('so-price').value;if(g('so-note'))sa.note=g('so-note').value}
+function opTotal(){const n=numx(sa.qty===''?'0':sa.qty);return isFinite(n)?r2(n*1000)/1000:NaN}
+function brandName(it,k){const nm=packNames(it);return nm[k]||''}
 function stockOpHtml(){
   const it=stockItem(sa.id);if(!it)return `<div class="sh-head"><h2>ไม่พบรายการ</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>`;
-  const ps=packsOf(it),p=ps.find(x=>x.k===sa.k),u=esc(it.unit),tot=opTotal(it),avg=avgOf(it.id);
+  const ps=packsOf(it),p=ps.find(x=>x.k===sa.k),u=esc(it.unit),tot=opTotal(),avg=avgOf(it.id),legacy=legacyPacks(it).length>0;
   const locked=sa.mode==='count'&&!countOpen();
   const verb={in:'รับเข้า',use:'เบิกใช้',count:'นับได้'}[sa.mode];
-  const diff=sa.mode==='count'&&isFinite(tot)&&(sa.packs!==''||sa.loose!=='')?r2((tot-it.qty)*1000)/1000:null;
-  const unitPrice=p&&numx(sa.price)>0?numx(sa.price)/p.pack:(!p&&numx(sa.price)>0?numx(sa.price):0);
+  const diff=sa.mode==='count'&&isFinite(tot)&&sa.qty!==''?r2((tot-it.qty)*1000)/1000:null;
+  const unitPrice=numx(sa.price)>0?numx(sa.price):0;
+  const brands=ps.filter(x=>x.label).length>0||ps.length>1;
   return `<div class="sh-head"><h2>${esc(it.name)}</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
-  <div class="card tight"><div class="ln"><span>คงเหลือในระบบ</span><b class="${it.qty<0?'neg':''}">${qfmt(it.qty)} ${u}</b></div>
+  <div class="card tight"><div class="ln"><span>คงเหลือ</span><b class="${it.qty<0?'neg':''}">${qfmt(it.qty)} ${u}</b></div>
     ${isOwner()?`<div class="ln"><span>ราคาเฉลี่ย</span><span>${avg?pfmt(avg)+' บาท / '+u:'ยังไม่มีราคา'}</span></div><div class="ln"><span>มูลค่า</span><span>${money(Math.max(0,it.qty)*avg)} บาท</span></div>`:''}
-    ${isOwner()?(nm=>ps.filter(x=>lastPrice(it.id,x.k)).map(x=>`<div class="ln"><span>ราคาล่าสุด ${esc(nm[x.k])}</span><span>${money(+lastPrice(it.id,x.k))} บาท</span></div>`).join(''))(packNames(it)):''}
     ${+it.min?`<div class="ln"><span>ขั้นต่ำ</span><span>${qfmt(it.min)} ${u}</span></div>`:''}
+    ${sa.scanned&&p&&brands?`<div class="ln"><span>สแกนได้</span><span>${esc(brandName(it,p.k))}</span></div>`:''}
     ${cache.count?.lines?.[it.id]?`<div class="ln small muted"><span>นับเดือนนี้แล้ว</span><span>${qfmt(cache.count.lines[it.id].c)} ${u}</span></div>`:''}</div>
+  ${legacy&&isOwner()?`<div class="note">รายการนี้ยังตั้งแบบเดิม (1 ห่อ = ${legacyPacks(it).map(x=>qfmt(x.pack)).join(' / ')} ${u}) กด "แก้ไข" เพื่อเปลี่ยนเป็นนับเป็นกล่องหรือถุง</div>`:''}
   ${stockModes().length>1?`<div class="seg big3">${stockModes().map(k=>`<button data-act="so-mode" data-v="${k}" aria-pressed="${sa.mode===k}" class="t-${k==='in'?'in':k==='use'?'out':'move'}">${SMODE[k]}</button>`).join('')}</div>`:''}
   ${locked?`<div class="note">${esc(thMonth(curMonth()))} ปิดการนับแล้ว${isOwner()?' กด "เปิดการนับอีกครั้ง" ในหน้าสต็อกถ้าต้องนับใหม่':''}</div>`:`
-  ${ps.length?`<div class="fld"><span>${sa.mode==='in'&&isOwner()&&ps.length>packChoices(it,'use').length?'ห่อ / ยี่ห้อ':'ขนาดห่อ'}</span><div class="chips">${packChoices(it,sa.mode).map(x=>`<button data-act="so-pack" data-v="${esc(x.k)}" aria-pressed="${x.on(p)}">${esc(x.text)}</button>`).join('')}<button data-act="so-pack" data-v="" aria-pressed="${!sa.k}">นับเป็น${u}</button></div></div>`:''}
-  <div class="two">${p?`<label class="fld"><span>${verb} (ห่อ)</span><input id="so-packs" inputmode="decimal" value="${esc(sa.packs)}" placeholder="0" autocomplete="off"></label>`:''}
-    <label class="fld"><span>${p?`+ เศษ (${u})`:`${verb} (${u})`}</span><input id="so-loose" inputmode="decimal" value="${esc(sa.loose)}" placeholder="0" autocomplete="off"></label></div>
-  <div class="ln"><span>รวม</span><b>${isFinite(tot)?qfmt(tot):'–'} ${u}</b></div>
+  <label class="fld"><span>${verb} (${u})</span>
+    <div class="qty-row"><button class="btn qbtn" data-act="so-dec" aria-label="ลด">−</button><input id="so-qty" class="amt-in t-${sa.mode==='in'?'in':sa.mode==='use'?'out':'move'}" inputmode="decimal" value="${esc(sa.qty)}" placeholder="0" autocomplete="off"><button class="btn qbtn" data-act="so-inc" aria-label="เพิ่ม">+</button></div></label>
   ${diff!==null?`<div class="ln"><span>ต่างจากในระบบ</span><b class="${diff<0?'out':diff>0?'in':''}">${diff>0?'+':''}${qfmt(diff)} ${u}${isOwner()&&avg&&diff?` (${diff>0?'+':'−'}${money(Math.abs(diff)*avg)} บาท)`:''}</b></div>`:''}
-  ${sa.mode==='in'&&isOwner()?`<label class="fld"><span>ราคา${p?`ต่อห่อ ${esc(packNames(it)[p.k]||'')}`:`ต่อ${u}`} (บาท) ไม่ใส่ก็ได้</span><input id="so-price" inputmode="decimal" value="${esc(sa.price)}" placeholder="ใช้คำนวณมูลค่าสต็อก" autocomplete="off"></label>
-    ${unitPrice?`<span class="hint">ราคาเฉลี่ยใหม่ ≈ ${pfmt(newAvg(it,tot,unitPrice))} บาท / ${u}</span>`:''}`:''}
+  ${sa.mode==='in'&&isOwner()?`${ps.length>1?`<div class="fld"><span>ยี่ห้อ</span><div class="chips">${ps.map(x=>`<button data-act="so-pack" data-v="${esc(x.k)}" aria-pressed="${sa.k===x.k}">${esc(brandName(it,x.k))}</button>`).join('')}</div></div>`:''}
+    <label class="fld"><span>ราคาต่อ${u} (บาท) ไม่ใส่ก็ได้</span><input id="so-price" inputmode="decimal" value="${esc(sa.price)}" placeholder="ใช้คำนวณมูลค่าสต็อก" autocomplete="off"></label>
+    ${unitPrice&&isFinite(tot)&&tot>0?`<span class="hint">รวม ${money(unitPrice*tot)} บาท · ราคาเฉลี่ยใหม่ ≈ ${pfmt(newAvg(it,tot,unitPrice))} บาท / ${u}</span>`:''}`:''}
   ${sa.mode!=='count'?`<label class="fld"><span>หมายเหตุ</span><input id="so-note" value="${esc(sa.note)}" maxlength="80" autocomplete="off" placeholder="${sa.mode==='in'?'เช่น Makro':'เช่น ทำบราวนี่'}"></label>`:''}
   ${sa.err?`<div class="err" style="margin-top:0">${esc(sa.err)}</div>`:''}`}
   <div class="sh-foot">${isOwner()?'<button class="btn ghost" data-act="st-edit">แก้ไข</button>':''}${locked?'<button class="btn primary" data-act="close">ปิด</button>':`<button class="btn" data-act="so-save" data-v="scan">บันทึก+สแกนต่อ</button><button class="btn primary" data-act="so-save">บันทึก</button>`}</div>
@@ -982,17 +983,16 @@ function saveOp(again){
   readOp();const it=stockItem(sa.id);if(!it)return closeSheet();
   if(!canMode(sa.mode)){sa.err='คุณไม่มีสิทธิ์ทำรายการนี้';return showSheet(stockOpHtml(),true)}
   if(sa.mode==='count'&&!countOpen()){sa.err='เดือนนี้ปิดการนับแล้ว';return showSheet(stockOpHtml(),true)}
-  const tot=opTotal(it);
+  const tot=opTotal();
   if(!isFinite(tot)||tot<0){sa.err='ใส่จำนวนเป็นตัวเลข';return showSheet(stockOpHtml(),true)}
   if(sa.mode!=='count'&&!(tot>0)){sa.err='ใส่จำนวนที่มากกว่า 0';return showSheet(stockOpHtml(),true)}
-  if(sa.mode==='count'&&sa.packs===''&&sa.loose===''){sa.err='ใส่จำนวนที่นับได้ ถ้าหมดแล้วใส่ 0';return showSheet(stockOpHtml(),true)}
+  if(sa.mode==='count'&&sa.qty===''){sa.err='ใส่จำนวนที่นับได้ ถ้าหมดแล้วใส่ 0';return showSheet(stockOpHtml(),true)}
   const note=(sa.note||'').trim();let msg='';
   if(sa.mode==='in'){
     const p=packsOf(it).find(x=>x.k===sa.k),price=numx(sa.price);
     if(isOwner()&&sa.price!==''){
       if(!(price>=0)){sa.err='ราคาต้องเป็นตัวเลข';return showSheet(stockOpHtml(),true)}
-      const unitPrice=p?price/p.pack:price;
-      const patch={avg:r2(newAvg(it,tot,unitPrice)*10000)/10000,upd:Date.now()};if(p)patch.last={[p.k]:price};
+      const patch={avg:r4(newAvg(it,tot,price)),upd:Date.now()};if(p&&p.pack===1)patch.last={[p.k]:price};
       fire(setDoc(doc(fb.db,'stockcost',it.id),patch,{merge:true}),'stockcost');
     }
     stockMove(it.id,'in',tot,{note});msg=`รับเข้า ${it.name} ${qfmt(tot)} ${it.unit}`;
@@ -1008,73 +1008,95 @@ function saveOp(again){
   if(again){ui.smode=mode;openScanner()}
 }
 
-/* item form (owner): add / edit, barcodes with pack sizes */
+/* item form (owner): add / edit. Each barcode = 1 unit; several barcodes = several brands of the same thing */
 function openItemForm(id,opt={}){
   const it=id?stockItem(id):null;
-  si={id,name:it?.name||'',unit:it?.unit||'กรัม',cat:it?.cat||SCATS[0],min:it?String(it.min||''):'',
-    codes:it?packsOf(it).map(p=>({c:p.c,pack:String(p.pack),label:p.label,price:lastPrice(id,p.k)})):(opt.code?[{c:opt.code,pack:'1',label:'',price:''}]:[]),
-    qty0:'',cost:id&&avgOf(id)?String(r2(avgOf(id)*10000)/10000):'',err:'',link:opt.code&&!id?'':null,scanCode:opt.code||'',confirmOff:false};
+  si={id,name:it?.name||'',unit:it?.unit||'กล่อง',cat:it?.cat||SCATS[0],min:it?String(it.min||''):'',
+    codes:it?packsOf(it).map(p=>({c:p.c,pack:p.pack,label:p.label,price:p.pack===1?lastPrice(id,p.k):''})):(opt.code?[{c:opt.code,pack:1,label:'',price:''}]:[]),
+    qty0:'',cost:id&&avgOf(id)?String(r4(avgOf(id))):'',err:'',link:opt.code&&!id?'':null,scanCode:opt.code||'',confirmOff:false,
+    cunit:'กล่อง'};
   si.cost0=si.cost;
   showSheet(itemFormHtml());
 }
 const lastPrice=(id,k)=>{const v=cache.stockcost[id]?.last?.[k];return v!=null&&v!==''?String(v):''};
 function readItem(){const g=x=>byId(x);if(!si)return;
   for(const k of ['name','min','qty0','cost'])if(g('si-'+k))si[k]=g('si-'+k).value;
-  if(g('si-unit'))si.unit=g('si-unit').value;if(g('si-cat'))si.cat=g('si-cat').value;if(g('si-link'))si.link=g('si-link').value;
-  si.codes.forEach((c,i)=>{if(g('si-c-'+i))c.c=g('si-c-'+i).value.trim();if(g('si-p-'+i))c.pack=g('si-p-'+i).value;if(g('si-l-'+i))c.label=g('si-l-'+i).value;if(g('si-r-'+i))c.price=g('si-r-'+i).value});
+  if(g('si-unit'))si.unit=g('si-unit').value;if(g('si-cat'))si.cat=g('si-cat').value;if(g('si-link'))si.link=g('si-link').value;if(g('si-cunit'))si.cunit=g('si-cunit').value;
+  si.codes.forEach((c,i)=>{if(g('si-c-'+i))c.c=g('si-c-'+i).value.trim();if(g('si-l-'+i))c.label=g('si-l-'+i).value;if(g('si-r-'+i))c.price=g('si-r-'+i).value});
+}
+function convertHtml(){
+  const it=si.id&&stockItem(si.id);if(!it)return '';
+  const lp=legacyPacks(it);if(!lp.length)return '';
+  const sizes=[...new Set(packsOf(it).map(p=>p.pack))];
+  if(sizes.length>1)return `<div class="credit"><b>รายการนี้มีหลายขนาดปนกัน</b><span class="small">ตอนนี้นับเป็น${esc(it.unit)} และบาร์โค้ดแต่ละอันมีขนาดต่างกัน (${sizes.map(qfmt).join(' / ')} ${esc(it.unit)}) ควรแยกแต่ละขนาดเป็นคนละรายการ: กด "เอาออก" ที่บาร์โค้ดขนาดอื่นแล้วบันทึก จากนั้นสแกนบาร์โค้ดนั้นเพื่อเพิ่มเป็นรายการใหม่ แล้วค่อยกลับมาเปลี่ยนรายการนี้เป็นนับเป็นกล่อง</span></div>`;
+  const P=sizes[0];
+  return `<div class="credit"><b>เปลี่ยนเป็นนับตามที่หยิบใช้</b><span class="small">ตอนนี้นับเป็น${esc(it.unit)} โดย 1 ${esc(si.cunit)} = ${qfmt(P)} ${esc(it.unit)} ระบบจะแปลงยอดคงเหลือ ${qfmt(it.qty)} ${esc(it.unit)} เป็น ${qfmt(it.qty/P)} ${esc(si.cunit)} พร้อมปรับขั้นต่ำและราคาเฉลี่ยให้ ราคาต่อ${esc(si.cunit)}ที่บันทึกไว้ยังใช้ได้เหมือนเดิม</span>
+    <div class="addrow"><select id="si-cunit" aria-label="หน่วยใหม่">${SUNITS.filter(x=>x!==it.unit).map(x=>`<option ${si.cunit===x?'selected':''}>${x}</option>`).join('')}</select><button class="btn sm danger" data-act="si-convert">เปลี่ยนเป็นนับเป็น${esc(si.cunit)}</button></div></div>`;
 }
 function itemFormHtml(){
-  const others=stockItems().filter(x=>x.id!==si.id);
+  const others=stockItems().filter(x=>x.id!==si.id),u=esc(si.unit);
   return `<div class="sh-head"><h2>${si.id?'แก้ไขวัตถุดิบ':'เพิ่มวัตถุดิบ'}</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
   ${si.scanCode&&!si.id?`<div class="note">บาร์โค้ด <b>${esc(si.scanCode)}</b> ยังไม่มีในระบบ</div>
-    ${others.length?`<div class="fld"><span>เป็นวัตถุดิบที่มีอยู่แล้วแต่คนละขนาดหรือยี่ห้อ?</span><div class="addrow"><select id="si-link" aria-label="ผูกกับรายการที่มีอยู่"><option value="">ไม่ใช่ เพิ่มเป็นรายการใหม่</option>${others.map(o=>`<option value="${esc(o.id)}" ${si.link===o.id?'selected':''}>${esc(o.name)}</option>`).join('')}</select></div></div>`:''}`:''}
-  ${si.link?`<div class="fld"><span>ขนาดของห่อนี้</span><div class="two"><label class="fld"><span class="small">1 ห่อ = (${esc(stockItem(si.link)?.unit||'')})</span><input id="si-p-0" inputmode="decimal" value="${esc(si.codes[0]?.pack||'1')}"></label>
-      <label class="fld"><span class="small">ราคาต่อห่อ (บาท)</span><input id="si-r-0" inputmode="decimal" value="${esc(si.codes[0]?.price||'')}" placeholder="ไม่ใส่ก็ได้"></label></div>
-      <label class="fld"><span class="small">ชื่อเรียก ยี่ห้อหรือขนาด (ไม่ใส่ก็ได้)</span><input id="si-l-0" value="${esc(si.codes[0]?.label||'')}" placeholder="เช่น ยี่ห้อ A กล่อง 250 มล."></label></div>`:`
-  <label class="fld"><span>ชื่อวัตถุดิบ</span><input id="si-name" value="${esc(si.name)}" maxlength="60" placeholder="เช่น แป้งเค้ก, เนยสด Anchor" autocomplete="off"></label>
-  <div class="two"><label class="fld"><span>หน่วยที่ใช้นับ</span><select id="si-unit">${SUNITS.map(u=>`<option ${si.unit===u?'selected':''}>${u}</option>`).join('')}</select></label>
+    ${others.length?`<div class="fld"><span>เป็นของชนิดเดียวกับที่มีอยู่แล้ว แต่คนละยี่ห้อ?</span><div class="addrow"><select id="si-link" aria-label="ผูกกับรายการที่มีอยู่"><option value="">ไม่ใช่ เพิ่มเป็นรายการใหม่</option>${others.map(o=>`<option value="${esc(o.id)}" ${si.link===o.id?'selected':''}>${esc(o.name)}</option>`).join('')}</select></div></div>`:''}`:''}
+  ${si.link?(()=>{const t=stockItem(si.link);return `<div class="two"><label class="fld"><span class="small">ยี่ห้อ (ไม่ใส่ก็ได้)</span><input id="si-l-0" value="${esc(si.codes[0]?.label||'')}" placeholder="เช่น Aroma"></label>
+      <label class="fld"><span class="small">ราคาต่อ${esc(t?.unit||'')} (บาท)</span><input id="si-r-0" inputmode="decimal" value="${esc(si.codes[0]?.price||'')}" placeholder="ไม่ใส่ก็ได้"></label></div>
+      <span class="hint">สแกนบาร์โค้ดนี้ 1 ครั้ง = 1 ${esc(t?.unit||'')} ของ ${esc(t?.name||'')}</span>`})():`
+  ${convertHtml()}
+  <label class="fld"><span>ชื่อวัตถุดิบ</span><input id="si-name" value="${esc(si.name)}" maxlength="60" placeholder="เช่น ครีมเหลว 1 ลิตร, กะทิ 250 มล." autocomplete="off"></label>
+  <div class="two"><label class="fld"><span>นับเป็น</span><select id="si-unit">${(SUNITS.includes(si.unit)?SUNITS:[si.unit,...SUNITS]).map(x=>`<option ${si.unit===x?'selected':''}>${x}</option>`).join('')}</select></label>
     <label class="fld"><span>หมวด</span><select id="si-cat">${SCATS.map(c=>`<option ${si.cat===c?'selected':''}>${c}</option>`).join('')}</select></label></div>
-  <span class="hint">ของที่ใช้ทีละน้อย เช่น แป้ง เนย ควรนับเป็นกรัม แล้วตั้งขนาดห่อด้านล่าง เวลารับเข้าใส่เป็นจำนวนห่อได้</span>
-  <div class="fld"><span>บาร์โค้ดและขนาดห่อ</span>
+  <span class="hint">นับตามที่หยิบใช้จริง เช่น กล่อง ถุง ขวด สแกน 1 ครั้ง = 1 ${u} ถ้ามีหลายขนาด เช่น กะทิ 150 มล. กับ 250 มล. ให้เพิ่มเป็นคนละรายการ</span>
+  <div class="fld"><span>บาร์โค้ด</span>
     ${si.codes.length?si.codes.map((c,i)=>`<div class="codebox"><div class="addrow"><input id="si-c-${i}" value="${esc(c.c)}" inputmode="numeric" placeholder="รหัสบาร์โค้ด" aria-label="รหัสบาร์โค้ด"><button class="btn sm" data-act="si-rmcode" data-v="${i}">เอาออก</button></div>
-      <div class="two"><label class="fld"><span class="small">1 ห่อ = (${esc(si.unit)})</span><input id="si-p-${i}" inputmode="decimal" value="${esc(c.pack)}"></label>
-        <label class="fld"><span class="small">ราคาต่อห่อ (บาท)</span><input id="si-r-${i}" inputmode="decimal" value="${esc(c.price||'')}" placeholder="ไม่ใส่ก็ได้"></label></div>
-      <label class="fld"><span class="small">ชื่อเรียก ยี่ห้อหรือขนาด</span><input id="si-l-${i}" value="${esc(c.label)}" placeholder="เช่น ยี่ห้อ A กล่อง 250 มล."></label>
-      ${numx(c.pack)>0&&numx(c.price)>0?`<span class="hint">= ${pfmt(numx(c.price)/numx(c.pack))} บาท ต่อ${esc(si.unit)}</span>`:''}</div>`).join('')
-      :'<span class="hint">ไม่มีบาร์โค้ด ใช้วิธีแตะเลือกจากรายการได้</span>'}
-    ${si.codes.length>1?'<span class="hint">หลายยี่ห้อที่ขนาดเท่ากัน ตอนเบิกใช้และนับจะรวมเป็นปุ่มเดียว ส่วนตอนรับเข้าพร้อมราคาจะแยกตามยี่ห้อ ใส่ชื่อยี่ห้อในช่องชื่อเรียกจะช่วยให้แยกง่าย</span>':''}
-    <div class="btns"><button class="btn sm" data-act="si-addcode">+ เพิ่มบาร์โค้ด</button><button class="btn sm" data-act="si-scancode">${ICON_SCAN} สแกนเพิ่ม</button></div></div>
-  <div class="two"><label class="fld"><span>ขั้นต่ำก่อนต้องซื้อ (${esc(si.unit)})</span><input id="si-min" inputmode="decimal" value="${esc(si.min)}" placeholder="0 = ไม่เตือน"></label>
-    <label class="fld"><span>ราคาเฉลี่ยต่อ${esc(si.unit)} (บาท)</span><input id="si-cost" inputmode="decimal" value="${esc(si.cost)}" placeholder="คิดจากราคาห่อให้"></label></div>
-  <span class="hint">ราคาเฉลี่ยใช้คิดมูลค่าสต็อก ถ้าเว้นว่าง ระบบคิดจากราคาต่อห่อด้านบนให้ และจะปรับเองทุกครั้งที่รับของเข้าพร้อมราคา</span>
-  ${si.id?'':`<label class="fld"><span>มีอยู่ตอนนี้ (${esc(si.unit)})</span><input id="si-qty0" inputmode="decimal" value="${esc(si.qty0)}" placeholder="0"></label>`}`}
+      <div class="two"><label class="fld"><span class="small">ยี่ห้อ (ไม่ใส่ก็ได้)</span><input id="si-l-${i}" value="${esc(c.label)}" placeholder="เช่น Aroma"></label>
+        ${c.pack===1?`<label class="fld"><span class="small">ราคาต่อ${u} (บาท)</span><input id="si-r-${i}" inputmode="decimal" value="${esc(c.price||'')}" placeholder="ไม่ใส่ก็ได้"></label>`:`<span class="hint">1 ห่อ = ${qfmt(c.pack)} ${u} (แบบเดิม)</span>`}</div></div>`).join('')
+      :'<span class="hint">ไม่มีบาร์โค้ด แตะเลือกจากรายการแทนได้</span>'}
+    <div class="btns"><button class="btn sm" data-act="si-addcode">+ เพิ่มบาร์โค้ด</button><button class="btn sm" data-act="si-scancode">${ICON_SCAN} สแกนเพิ่ม</button></div>
+    ${si.codes.length>1?'<span class="hint">หลายบาร์โค้ดในรายการเดียว = ของเดียวกันคนละยี่ห้อ สแกนยี่ห้อไหนก็นับรวมกัน</span>':''}</div>
+  <div class="two"><label class="fld"><span>ขั้นต่ำก่อนต้องซื้อ (${u})</span><input id="si-min" inputmode="decimal" value="${esc(si.min)}" placeholder="0 = ไม่เตือน"></label>
+    <label class="fld"><span>ราคาเฉลี่ยต่อ${u} (บาท)</span><input id="si-cost" inputmode="decimal" value="${esc(si.cost)}" placeholder="คิดจากราคาด้านบนให้"></label></div>
+  ${si.id?'':`<label class="fld"><span>มีอยู่ตอนนี้ (${u})</span><input id="si-qty0" inputmode="decimal" value="${esc(si.qty0)}" placeholder="0"></label>`}`}
   ${si.err?`<div class="err" style="margin-top:0">${esc(si.err)}</div>`:''}
   <div class="sh-foot">${si.id?(si.confirmOff?'<button class="btn danger" data-act="si-off-yes">ยืนยันเลิกใช้</button>':'<button class="btn ghost danger-t" data-act="si-off">เลิกใช้รายการนี้</button>'):''}<button class="btn primary" data-act="si-save">บันทึก</button></div>`;
+}
+function convertItem(){
+  readItem();const it=stockItem(si.id);if(!it)return;
+  const sizes=[...new Set(packsOf(it).map(p=>p.pack))];if(sizes.length!==1||sizes[0]===1)return;
+  const P=sizes[0],nu=si.cunit,codes={};
+  for(const p of packsOf(it))codes[p.k]={c:p.c,pack:1,label:p.label||''};
+  const qty=r2(it.qty/P*1000)/1000,min=r2((+it.min||0)/P*1000)/1000;
+  fire(setDoc(doc(fb.db,'stock',it.id),{unit:nu,min,codes,qty,upd:Date.now()},{mergeFields:['unit','min','codes','qty','upd']}),'convert');
+  const a=avgOf(it.id);if(a)fire(setDoc(doc(fb.db,'stockcost',it.id),{avg:r4(a*P),upd:Date.now()},{merge:true}),'convert-cost');
+  const ln=cache.count?.lines?.[it.id];
+  if(ln&&countOpen())fire(setDoc(doc(fb.db,'stockcounts',curMonth()),{m:curMonth(),status:'open',lines:{[it.id]:{...ln,c:r2(ln.c/P*1000)/1000,e:r2(ln.e/P*1000)/1000}}},{merge:true}),'convert-count');
+  fire(setDoc(doc(collection(fb.db,'stockmoves')),{item:it.id,t:'conv',q:0,ts:Date.now(),at:serverTimestamp(),by:user.uid,email:(user.email||'').toLowerCase(),m:curMonth(),note:`เปลี่ยนจาก${it.unit}เป็น${nu} (1 ${nu} = ${qfmt(P)} ${it.unit})`}),'stockmove');
+  audit('stock-edit','','',{name:it.name,unit:it.unit,qty:it.qty},{name:it.name,unit:nu,qty});
+  cache.stock[it.id]={...cache.stock[it.id],unit:nu,min,codes,qty};
+  closeSheet();toast(`${it.name}: นับเป็น${nu}แล้ว เหลือ ${qfmt(qty)} ${nu}`);
 }
 function saveItem(){
   readItem();
   const used=c=>{const f=findByCode(c);return f&&f.item.id!==(si.link||si.id)?f.item.name:''};
   if(si.link){
-    const tgt=stockItem(si.link),pack=numx(si.codes[0]?.pack);
-    if(!(pack>0)){si.err='ขนาดห่อต้องมากกว่า 0';return showSheet(itemFormHtml(),true)}
+    const tgt=stockItem(si.link);
     const pr=si.codes[0]?.price||'',price=pr===''?null:numx(pr);
     if(price!==null&&!(price>=0)){si.err='ราคาต้องเป็นตัวเลข';return showSheet(itemFormHtml(),true)}
-    const k=codeKey(si.scanCode),entry={c:si.scanCode,pack,label:(si.codes[0]?.label||'').trim()};
-    if(price!==null){const patch={last:{[k]:price},upd:Date.now()};if(!avgOf(si.link))patch.avg=r2(price/pack*1e6)/1e6;
+    const k=codeKey(si.scanCode),entry={c:si.scanCode,pack:1,label:(si.codes[0]?.label||'').trim()};
+    if(price!==null){const patch={last:{[k]:price},upd:Date.now()};if(!avgOf(si.link))patch.avg=price;
       fire(setDoc(doc(fb.db,'stockcost',si.link),patch,{merge:true}),'stockcost');
       cache.stockcost[si.link]={...(cache.stockcost[si.link]||{}),...patch,last:{...(cache.stockcost[si.link]?.last||{}),[k]:price}}}
     fire(setDoc(doc(fb.db,'stock',si.link),{codes:{[k]:entry},upd:Date.now()},{merge:true}),'item');
     if(cache.stock[si.link])cache.stock[si.link]={...cache.stock[si.link],codes:{...(cache.stock[si.link].codes||{}),[k]:entry}};
-    const id=si.link;si=null;closeSheet();toast(`ผูกบาร์โค้ดกับ ${tgt?.name||''} แล้ว`);openStockOp(id,ui.smode,k);return;
+    const id=si.link;si=null;closeSheet();toast(`เพิ่มบาร์โค้ดให้ ${tgt?.name||''} แล้ว`);openStockOp(id,ui.smode,k);return;
   }
   const name=si.name.trim();if(!name){si.err='ใส่ชื่อวัตถุดิบ';return showSheet(itemFormHtml(),true)}
-  const codes={},last={},unitPrices=[];
-  for(const c of si.codes){if(!c.c)continue;const pack=numx(c.pack);
-    if(c.price!==''&&c.price!=null){const pr=numx(c.price);if(!(pr>=0)){si.err=`ราคาของ ${c.c} ต้องเป็นตัวเลข`;return showSheet(itemFormHtml(),true)}
-      if(pack>0){last[codeKey(c.c)]=pr;unitPrices.push(pr/pack)}}
-    if(!(pack>0)){si.err=`ขนาดห่อของ ${c.c} ต้องมากกว่า 0`;return showSheet(itemFormHtml(),true)}
+  const codes={},last={},prices=[],seen=new Set();
+  for(const c of si.codes){if(!c.c)continue;
+    if(seen.has(c.c)){si.err=`บาร์โค้ด ${c.c} ซ้ำกัน`;return showSheet(itemFormHtml(),true)}seen.add(c.c);
     const u=used(c.c);if(u){si.err=`บาร์โค้ด ${c.c} ใช้กับ "${u}" อยู่แล้ว`;return showSheet(itemFormHtml(),true)}
-    codes[codeKey(c.c)]={c:c.c,pack,label:(c.label||'').trim()}}
+    const pack=+c.pack||1,k=codeKey(c.c);
+    if(pack===1&&c.price!==''&&c.price!=null){const pr=numx(c.price);if(!(pr>=0)){si.err=`ราคาของ ${c.c} ต้องเป็นตัวเลข`;return showSheet(itemFormHtml(),true)}last[k]=pr;prices.push(pr)}
+    codes[k]={c:c.c,pack,label:(c.label||'').trim()}}
   const min=si.min===''?0:numx(si.min),cost=si.cost===''?null:numx(si.cost),q0=si.qty0===''?0:numx(si.qty0);
   if(!(min>=0)||(cost!==null&&!(cost>=0))||!(q0>=0)){si.err='ขั้นต่ำ ราคา และจำนวนต้องเป็นตัวเลข';return showSheet(itemFormHtml(),true)}
   const isNew=!si.id,id=si.id||('s'+rid());
@@ -1082,10 +1104,10 @@ function saveItem(){
   if(isNew){data.qty=q0;data.at=Date.now();data.by=user.uid}
   // on edit, replace these fields whole (so removed barcodes disappear) and leave qty alone
   fire(isNew?setDoc(doc(fb.db,'stock',id),data):setDoc(doc(fb.db,'stock',id),data,{mergeFields:['name','unit','cat','min','codes','upd']}),'item');
-  // average cost per base unit: typed value wins; otherwise start from the pack prices if there is no average yet
+  // average cost: typed value wins; otherwise start from the barcode prices if there is no average yet
   let avg=null;
   if(cost!==null&&si.cost!==si.cost0)avg=cost;
-  else if(!avgOf(id)&&unitPrices.length)avg=r2(unitPrices.reduce((a,b)=>a+b,0)/unitPrices.length*1e6)/1e6;
+  else if(!avgOf(id)&&prices.length)avg=r4(prices.reduce((a,b)=>a+b,0)/prices.length);
   else if(isNew&&cost!==null)avg=cost;
   const cpatch={upd:Date.now()};if(avg!==null)cpatch.avg=avg;if(Object.keys(last).length)cpatch.last=last;
   if(avg!==null||cpatch.last)fire(setDoc(doc(fb.db,'stockcost',id),cpatch,{merge:true}),'stockcost');
@@ -1174,7 +1196,7 @@ async function openStockHistory(){
 function exportStockCsv(){
   const cell=v=>{if(typeof v==='number')return String(v);let s=String(v??'');if(/^[=+\-@]/.test(s))s="'"+s;return /[",\r\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
   const lines=cache.count?.lines||{};
-  const rows=stockItems().map(it=>{const a=avgOf(it.id);return [it.name,it.cat||'',it.qty,it.unit,r2(a*10000)/10000,r2(Math.max(0,it.qty)*a),+it.min||0,lines[it.id]?'นับแล้ว':'',packsOf(it).map(p=>p.c).join(' ')]});
+  const rows=stockItems().map(it=>{const a=avgOf(it.id);return [it.name,it.cat||'',it.qty,it.unit,r4(a),r2(Math.max(0,it.qty)*a),+it.min||0,lines[it.id]?'นับแล้ว':'',packsOf(it).map(p=>p.c).join(' ')]});
   const csv='﻿'+[['วัตถุดิบ','หมวด','คงเหลือ','หน่วย','ราคาเฉลี่ยต่อหน่วย','มูลค่า','ขั้นต่ำ',`นับ ${curMonth()}`,'บาร์โค้ด'],...rows].map(r=>r.map(cell).join(',')).join('\r\n');
   saveFile(`สต็อก-${todayKey()}.csv`,csv,'text/csv;charset=utf-8');
 }
