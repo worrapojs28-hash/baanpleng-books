@@ -198,6 +198,25 @@ input,select{font-size:16px}
 .scanline{position:absolute;left:8%;right:8%;top:50%;height:2px;background:#e5484d;opacity:.9}
 .codebox{border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
 .rem .small{font-weight:400}
+.genhead{display:flex;align-items:center;gap:8px;flex:1;min-width:0;font-variant-numeric:tabular-nums;flex-wrap:wrap}
+.labprev{background:#fff;border-radius:8px;padding:6px;display:flex;justify-content:center;max-width:100%;overflow:hidden}
+.labprev svg{max-width:100%;height:auto}
+.labctl{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.labrow{flex-direction:column;align-items:stretch;gap:8px}
+.labrow .main{gap:6px}
+.qty-row.sm{grid-template-columns:40px auto 40px;align-items:center}
+.qty-row.sm .qbtn{height:36px;font-size:20px}
+.labn{font-variant-numeric:tabular-nums;white-space:nowrap}
+#printarea{display:none}
+@media print{
+  body>*:not(#printarea){display:none!important}
+  html,body{background:#fff!important;padding:0!important;margin:0}
+  #printarea{display:block}
+  .pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;padding:6mm}
+  .plabel{border:1px dashed #bbb;padding:3mm;text-align:center;break-inside:avoid;color:#000}
+  .plabel svg{width:100%;height:auto}
+  .pname{font-size:11pt;margin-bottom:1mm;font-family:"IBM Plex Sans Thai",sans-serif}
+}
 .qty-row{display:grid;grid-template-columns:56px minmax(0,1fr) 56px;gap:8px;align-items:stretch}
 .qty-row input{text-align:center}
 .qbtn{font-size:26px;line-height:1;padding:0}
