@@ -149,12 +149,12 @@ function rowHtml(e){
   const who=e.cid&&M.contacts[e.cid]?M.contacts[e.cid].name:'';
   const d=due(e);
   const tag=e.imp?'<span class="chip warn">ยอดยกมา</span>':e.credit&&(e.t==='in'||e.t==='out')?(d>0?`<span class="chip warn">ค้าง ${money(d)}</span>`:`<span class="chip ok">ชำระครบ</span>`):'';
-  const where=e.t==='move'?'ย้ายเงิน':e.t==='draw'?'จาก '+accName(e.acc):e.credit?'เงินเชื่อ':accName(e.acc);
-  const sub=[who,e.note].filter(Boolean).join(' · ')||where;
+  const src=e.t==='move'?'ย้ายเงิน':e.t==='draw'?'ถอนจาก '+(accName(e.acc)||'ไม่ระบุบัญชี'):e.credit?(e.t==='in'?'ลูกค้าค้าง':'ค้างจ่าย'):(e.t==='in'?'รับทาง ':'จ่ายทาง ')+(accName(e.acc)||'ไม่ระบุบัญชี');
+  const sub=[src,who].filter(Boolean).join(' · ');
   const sign=e.t==='in'?'+':e.t==='move'?'':'−';
   return `<button class="row" data-act="edit" data-id="${esc(e.id)}" data-d="${esc(e.d)}">
     <span class="dot ${e.t}"></span>
-    <span class="main"><span class="t">${esc(title)}</span><span class="s"><span>${esc(sub)}</span>${tag}</span></span>
+    <span class="main"><span class="t">${esc(title)}</span><span class="s"><span>${esc(sub)}</span>${tag}</span>${e.note?`<span class="nt">${esc(e.note)}</span>`:''}</span>
     <span class="amt ${e.t}">${sign}${money(e.amt)}</span></button>`;
 }
 function chart(mk){
