@@ -26,7 +26,9 @@ function deepMerge(a,b){const out=isObj(a)?{...a}:{};for(const[k,v]of Object.ent
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const byId=id=>document.getElementById(id);
 
-const TYPE={in:'รายรับ',out:'รายจ่าย',draw:'ถอนเงินเจ้าของ',move:'ย้ายเงิน'};
+const TYPE={in:'รายรับ',out:'รายจ่าย',draw:'ถอนเงินเจ้าของ',move:'ย้ายเงิน',cap:'เงินทุนเข้า'};
+const CAPK=['เพิ่มทุน','ขายหุ้น'];
+const ownerOnlyT=t=>t==='draw'||t==='cap';
 const DEFAULTS={shop:'ขนมบ้านเพลง-พระแท่น',open:{},
   accs:[{id:'cash',n:'เงินสด'},{id:'scb',n:'SCB'},{id:'ktb',n:'KTB'}],
   cats:{
@@ -88,6 +90,7 @@ function flows(){
     if(e.imp)continue;
     if(e.t==='move'){f.push({date:e.d,acc:e.acc,amt:-e.amt},{date:e.d,acc:e.to,amt:e.amt});continue}
     if(e.t==='draw'){f.push({date:e.d,acc:e.acc||'cash',amt:-e.amt,draw:true});continue}
+    if(e.t==='cap'){f.push({date:e.d,acc:e.acc||'cash',amt:e.amt,cap:true});continue}
     const sg=e.t==='in'?1:-1;
     if(!e.credit)f.push({date:e.d,acc:e.acc||'cash',amt:sg*e.amt});
     else for(const p of Object.values(e.pays||{}))if(p)f.push({date:p.date,acc:p.acc||'cash',amt:sg*(+p.amt||0)});
@@ -97,10 +100,11 @@ function flows(){
 function balances(){const b={};for(const a of M.s.accs)b[a.id]=+M.s.open[a.id]||0;for(const x of flows())b[x.acc]=(b[x.acc]||0)+x.amt;return b}
 function shownAccs(b){return M.s.accs.filter(a=>!a.h||Math.abs(b[a.id]||0)>0.004)}
 function pnl(from,to){
-  const r={inc:{},cogs:{},opex:{},owner:{in:0,out:0},I:0,C:0,O:0,draw:0,drawBy:{}};
+  const r={inc:{},cogs:{},opex:{},owner:{in:0,out:0},I:0,C:0,O:0,draw:0,drawBy:{},cap:0,capBy:{}};
   for(const e of M.entries){
     if(e.t==='move'||e.d<from||e.d>to)continue;
     if(e.t==='draw'){r.draw+=e.amt;if(!e.imp)r.drawBy[e.acc]=(r.drawBy[e.acc]||0)+e.amt;continue}
+    if(e.t==='cap'){r.cap+=e.amt;const k=e.cat||'เพิ่มทุน';r.capBy[k]=(r.capBy[k]||0)+e.amt;continue}
     const c=catInfo(e.t,e.cat);
     if(c.pl===false){r.owner[e.t]+=e.amt;continue}
     if(e.t==='in'){r.inc[e.cat]=(r.inc[e.cat]||0)+e.amt;r.I+=e.amt}
@@ -138,7 +142,7 @@ function renderStatus(){
   el.className='pill '+cls;el.textContent=txt;
 }
 function vStaffHome(){
-  const t=todayKey(),mine=M.entries.filter(e=>e.d===t);
+  const t=todayKey(),mine=M.entries.filter(e=>e.d===t&&!ownerOnlyT(e.t));
   return `<section class="hero"><span class="eyebrow">วันนี้ · ${esc(thDay(t))}</span>
     <span class="big">${mine.length}<span class="unit">รายการ</span></span><span class="hero-sub">บันทึกแล้ววันนี้ กดปุ่ม + เพื่อเพิ่มรายการ</span></section>
   <section class="day"><div class="row-head"><h2>รายการวันนี้</h2></div>
@@ -146,12 +150,12 @@ function vStaffHome(){
 }
 function rowHtml(e){
   const title=e.t==='move'?`${accName(e.acc)} → ${accName(e.to)}`:e.t==='draw'?'ถอนเงินเจ้าของ':e.cat;
-  const who=e.cid&&M.contacts[e.cid]?M.contacts[e.cid].name:'';
+  const who=e.t==='cap'?(e.inv||''):e.cid&&M.contacts[e.cid]?M.contacts[e.cid].name:'';
   const d=due(e);
   const tag=e.imp?'<span class="chip warn">ยอดยกมา</span>':e.credit&&(e.t==='in'||e.t==='out')?(d>0?`<span class="chip warn">ค้าง ${money(d)}</span>`:`<span class="chip ok">ชำระครบ</span>`):'';
-  const src=e.t==='move'?'ย้ายเงิน':e.t==='draw'?'ถอนจาก '+(accName(e.acc)||'ไม่ระบุบัญชี'):e.credit?(e.t==='in'?'ลูกค้าค้าง':'ค้างจ่าย'):(e.t==='in'?'รับทาง ':'จ่ายทาง ')+(accName(e.acc)||'ไม่ระบุบัญชี');
+  const src=e.t==='move'?'ย้ายเงิน':e.t==='cap'?'เข้าบัญชี '+(accName(e.acc)||'ไม่ระบุบัญชี'):e.t==='draw'?'ถอนจาก '+(accName(e.acc)||'ไม่ระบุบัญชี'):e.credit?(e.t==='in'?'ลูกค้าค้าง':'ค้างจ่าย'):(e.t==='in'?'รับทาง ':'จ่ายทาง ')+(accName(e.acc)||'ไม่ระบุบัญชี');
   const sub=[src,who].filter(Boolean).join(' · ');
-  const sign=e.t==='in'?'+':e.t==='move'?'':'−';
+  const sign=e.t==='in'||e.t==='cap'?'+':e.t==='move'?'':'−';
   return `<button class="row" data-act="edit" data-id="${esc(e.id)}" data-d="${esc(e.d)}">
     <span class="dot ${e.t}"></span>
     <span class="main"><span class="t">${esc(title)}</span><span class="s"><span>${esc(sub)}</span>${tag}</span>${e.note?`<span class="nt">${esc(e.note)}</span>`:''}</span>
@@ -181,8 +185,8 @@ function compareHtml(t){
   const mk=monthOf(t),pk=addMonth(mk,-1),day=+t.slice(8);
   const[py,pmn]=pk.split('-').map(Number),plen=new Date(py,pmn,0).getDate(),pd=Math.min(day,plen);
   const cur=pnl(mk+'-01',t),prev=pnl(pk+'-01',`${pk}-${pad(pd)}`);
-  if(!prev.I&&!prev.C&&!prev.O&&!prev.draw)return '';
-  const rows=[['รายรับ',cur.I,prev.I,1],['รายจ่าย',cur.C+cur.O,prev.C+prev.O,-1],['กำไร',cur.N,prev.N,1],['ถอนเงินเจ้าของ',cur.draw,prev.draw,0]];
+  if(!prev.I&&!prev.C&&!prev.O&&!prev.draw&&!prev.cap)return '';
+  const rows=[['รายรับ',cur.I,prev.I,1],['รายจ่าย',cur.C+cur.O,prev.C+prev.O,-1],['กำไร',cur.N,prev.N,1],['ถอนเงินเจ้าของ',cur.draw,prev.draw,0],...(cur.cap||prev.cap?[['เงินทุนเข้า',cur.cap,prev.cap,0]]:[])];
   const chg=(c,p,good)=>{if(!p)return '<span class="muted">–</span>';const x=Math.round((c-p)/Math.abs(p)*1000)/10;
     const cls=good===0||x===0?'muted':(x>0)===(good>0)?'in':'out';return `<span class="${cls}">${x>0?'+':''}${x}%</span>`};
   return `<div><div class="grp">เทียบช่วงเดียวกันเดือนก่อน (1–${pd} ${esc(new Date(pk+'-01T00:00:00').toLocaleDateString('th-TH',{month:'short'}))})</div>
@@ -214,6 +218,7 @@ function vHome(){
     <div class="row-head"><h2>${esc(thMonth(mk))}</h2><button class="link" data-act="tab" data-tab="report">ดูงบกำไรขาดทุน</button></div>
     <div class="pair3"><div><span class="lbl">รายรับ</span><b class="in">${money(pm.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(pm.C+pm.O)}</b></div><div><span class="lbl">กำไร</span><b class="${pm.N<0?'neg':''}">${money(pm.N)}</b></div></div>
     ${pm.draw?`<div class="ln"><span class="draw">ถอนเงินเจ้าของเดือนนี้</span><span class="draw">${money(pm.draw)}</span></div>`:''}
+    ${pm.cap?`<div class="ln"><span class="cap">เงินทุนเข้าเดือนนี้ (ไม่นับเป็นรายรับ)</span><span class="cap">${money(pm.cap)}</span></div>`:''}
     ${compareHtml(t)}
     ${chart(mk)}
   </section>
@@ -227,13 +232,14 @@ function monthNav(){
 }
 function vList(){
   const mk=ui.month,p=pnl(...mRange(mk));
-  const es_=M.entries.filter(e=>monthOf(e.d)===mk&&(ui.filter==='all'||e.t===ui.filter)&&(isOwner()||e.t!=='draw'));
+  const es_=M.entries.filter(e=>monthOf(e.d)===mk&&(ui.filter==='all'||e.t===ui.filter)&&(isOwner()||!ownerOnlyT(e.t)));
   const groups={};for(const e of es_)(groups[e.d]=groups[e.d]||[]).push(e);
   const days=Object.entries(groups);
   return `${monthNav()}
-  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||k!=='draw').map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
+  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['cap','เงินทุน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||!ownerOnlyT(k)).map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
   ${isOwner()?`<div class="sum3"><div><span class="lbl">รายรับ</span><b class="in">${money(p.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(p.C+p.O)}</b></div><div><span class="lbl">กำไร</span><b class="${p.N<0?'neg':''}">${money(p.N)}</b></div></div>
-  ${p.draw?`<div class="note">ถอนเงินเจ้าของเดือนนี้ ${money(p.draw)} บาท (ไม่นับเป็นรายจ่าย)</div>`:''}`:''}
+  ${p.draw?`<div class="note">ถอนเงินเจ้าของเดือนนี้ ${money(p.draw)} บาท (ไม่นับเป็นรายจ่าย)</div>`:''}
+  ${p.cap?`<div class="note">เงินทุนเข้าเดือนนี้ ${money(p.cap)} บาท (ไม่นับเป็นรายรับ)</div>`:''}`:''}
   ${days.length?days.map(([d,arr])=>{
     const di=arr.filter(e=>e.t==='in').reduce((s,e)=>s+e.amt,0),dout=arr.filter(e=>e.t==='out').reduce((s,e)=>s+e.amt,0);
     return `<section class="day"><div class="day-head"><span>${esc(thDay(d))}</span>${isOwner()?`<span><span class="in">+${money(di)}</span> <span class="out">−${money(dout)}</span></span>`:''}</div><div class="list">${arr.map(rowHtml).join('')}</div></section>`;
@@ -258,6 +264,20 @@ function vDebt(){
       <div class="rem"><b class="${s}">${money(due(e))}</b>${canWrite?`<button class="btn sm" data-act="pay" data-id="${esc(e.id)}" data-d="${esc(e.d)}">${s==='in'?'รับเงิน':'จ่ายเงิน'}</button>`:''}</div></div>`}).join('')}</div></section>`;
   }).join(''):`<div class="empty"><b>ไม่มียอดค้าง</b><p>${s==='in'?'ถ้าลูกค้าซื้อเชื่อ ให้บันทึกรายรับแล้วเลือก "ลูกค้าค้าง"':'ถ้าซื้อวัตถุดิบแบบเครดิต ให้บันทึกรายจ่ายแล้วเลือก "ค้างจ่าย"'}</p></div>`}`;
 }
+function capCard(mk,p){
+  const all=M.entries.filter(e=>e.t==='cap'&&e.d<=mk+'-31');
+  if(!all.length)return '';
+  const byInv={},byKind={};let tot=0;
+  for(const e of all){const k=(e.inv||'').trim()||'ไม่ระบุชื่อ';byInv[k]=(byInv[k]||0)+e.amt;byKind[e.cat||'เพิ่มทุน']=(byKind[e.cat||'เพิ่มทุน']||0)+e.amt;tot+=e.amt}
+  const ln=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="ln"><span>${esc(k)}</span><span>${money(v)}${tot?` <span class="muted small">(${Math.round(v/tot*1000)/10}%)</span>`:''}</span></div>`).join('');
+  return `<section class="card"><div><h2>เงินทุน</h2><span class="muted small">เงินเพิ่มทุนและเงินขายหุ้น เข้าบัญชีร้านแต่ไม่นับเป็นรายรับ จึงไม่ทำให้กำไรเพิ่ม</span></div>
+    <div><div class="ln tot"><span>เงินทุนเข้า${esc(thMonth(mk))}</span><span class="cap">${money(p.cap)}</span></div>
+    ${Object.entries(p.capBy).map(([k,v])=>`<div class="ln"><span>${esc(k)}</span><span>${money(v)}</span></div>`).join('')}
+    <div class="grp">ยอดสะสมถึงสิ้นเดือนนี้ แยกตามผู้ลงทุน</div>${ln(byInv)}
+    <div class="ln tot"><span>รวมเงินทุนสะสม</span><span>${money(tot)}</span></div>
+    ${Object.keys(byKind).length>1?`<span class="muted small">${Object.entries(byKind).map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}</span>`:''}
+    <span class="muted small">สัดส่วนนับจากเงินที่บันทึกในแอปนี้เท่านั้น ไม่รวมทุนที่ลงไว้ก่อนเริ่มใช้แอป</span></div></section>`;
+}
 function vReport(){
   const mk=ui.month,p=pnl(...mRange(mk));
   const lines=obj=>Object.entries(obj).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="ln"><span>${esc(k)}</span><span>${money(v)}</span></div>`).join('')||'<div class="ln muted"><span>ไม่มีรายการ</span><span>0</span></div>';
@@ -278,11 +298,13 @@ function vReport(){
     <span class="muted small">ต้นทุนขายคิดเป็น ${pct(p.C)} ของรายได้ · กำไรสุทธิ ${pct(p.N)}</span>
     ${(p.owner.in||p.owner.out)?`<div class="note">ไม่นับในกำไร: รายรับ ${money(p.owner.in)} บาท (เช่น เจ้าของลงเงินเพิ่ม) · รายจ่าย ${money(p.owner.out)} บาท</div>`:''}
   </section>
+  ${capCard(mk,p)}
   <section class="card"><div><h2>เงินเข้า-ออกจริง</h2><span class="muted small">นับตามวันที่ได้รับหรือจ่ายเงินจริง รวมการรับชำระหนี้ ไม่รวมยอดยกมาจากบัญชีเก่า</span></div>
     <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>ช่องทาง</th><th>เข้า</th><th>ออก</th><th>สุทธิ</th></tr></thead><tbody>
     ${tAccs.map(a=>{const i=cin[a.id]||0,o=cout[a.id]||0;return `<tr><td>${esc(a.n)}</td><td class="in">${money(i)}</td><td class="out">${money(o)}</td><td>${money(i-o)}</td></tr>`}).join('')}
     <tr><td><b>รวม</b></td><td class="in"><b>${money(sumv(cin))}</b></td><td class="out"><b>${money(sumv(cout))}</b></td><td><b>${money(sumv(cin)-sumv(cout))}</b></td></tr>
     </tbody></table></div>
+    ${p.cap?`<span class="muted small">เงินเข้ารวมเงินทุน ${money(p.cap)} บาท</span>`:''}
     ${p.draw?`<span class="muted small">เงินออกรวมการถอนเงินเจ้าของ ${Object.entries(p.drawBy).map(([k,v])=>`${esc(accName(k))} ${money(v)}`).join(' · ')}</span>`:''}</section>
   <section class="card"><h2>สรุปปี ${+y+543}</h2>
     <div class="ln"><span>รายได้สะสมทั้งปี</span><span>${money(py.I)} บาท</span></div>
@@ -309,7 +331,7 @@ function closeSheet(){stopScan();sa=null;si=null;byId('sheet').hidden=true;byId(
 function openEntry(id,d){
   if(id){
     const e=M.entries.find(x=>x.id===id&&x.d===d);if(!e)return;
-    es={mode:'edit',id,origDate:d,t:e.t,amt:String(e.amt),cat:e.cat||'',acc:e.acc||'cash',to:e.to||defTo(e.acc||'cash'),date:d,note:e.note||'',credit:!!e.credit,cid:e.cid||'',due:e.due||'',newC:false,cName:'',cPhone:'',confirmDel:false,hasPays:paid(e)>0,ref:e.ref||'',att:e.att||'',rno:e.rno||'',rc:e.rc||'',rcData:'',rcDrop:false,ro:false,roMsg:''};
+    es={mode:'edit',id,origDate:d,t:e.t,amt:String(e.amt),cat:e.cat||'',acc:e.acc||'cash',to:e.to||defTo(e.acc||'cash'),date:d,note:e.note||'',credit:!!e.credit,cid:e.cid||'',due:e.due||'',inv:e.inv||'',newC:false,cName:'',cPhone:'',confirmDel:false,hasPays:paid(e)>0,ref:e.ref||'',att:e.att||'',rno:e.rno||'',rc:e.rc||'',rcData:'',rcDrop:false,ro:false,roMsg:''};
   }else{
     es={mode:'new',ro:false,roMsg:'',rc:'',rcData:'',rcDrop:false,t:'in',amt:'',cat:'',acc:'cash',to:defTo('cash'),date:todayKey(),note:'',credit:false,cid:'',due:'',newC:false,cName:'',cPhone:'',confirmDel:false};
   }
@@ -322,7 +344,7 @@ function openEntry(id,d){
 }
 function readEntry(){
   const g=id=>byId(id);
-  if(g('f-amt'))es.amt=g('f-amt').value;if(g('f-date'))es.date=g('f-date').value;if(g('f-note'))es.note=g('f-note').value;
+  if(g('f-amt'))es.amt=g('f-amt').value;if(g('f-date'))es.date=g('f-date').value;if(g('f-note'))es.note=g('f-note').value;if(g('f-inv'))es.inv=g('f-inv').value;
   if(g('f-cid'))es.cid=g('f-cid').value;if(g('f-due'))es.due=g('f-due').value;
   if(g('f-cname'))es.cName=g('f-cname').value;if(g('f-cphone'))es.cPhone=g('f-cphone').value;
 }
@@ -342,20 +364,24 @@ function entryHtml(err={}){
     <label class="fld"><span>กำหนดชำระ (ถ้ามี)</span><input id="f-due" type="date" value="${esc(es.due)}"></label>
     ${es.hasPays?'<span class="small" style="color:var(--sugar)">รายการนี้มีการชำระบางส่วนแล้ว ดูได้ที่หน้า ค้างชำระ</span>':''}</div>`:'';
   return `<div class="sh-head"><h2>${es.mode==='new'?'บันทึกรายการ':'แก้ไขรายการ'}</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
-  <div class="seg big3">${[['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||k!=='draw'||t==='draw').map(([k,l])=>`<button data-act="e-type" data-v="${k}" aria-pressed="${t===k}" class="t-${k}">${l}</button>`).join('')}</div>
+  <div class="seg big3">${[['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['cap','เงินทุน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||!ownerOnlyT(k)||t===k).map(([k,l])=>`<button data-act="e-type" data-v="${k}" aria-pressed="${t===k}" class="t-${k}">${l}</button>`).join('')}</div>
   <label class="fld"><span>จำนวนเงิน (บาท)</span><input id="f-amt" class="amt-in t-${t}" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(es.amt)}"></label>
   ${err.amt?`<div class="err">${err.amt}</div>`:''}
   ${hasCat(t)?`<div class="fld"><span>หมวด</span><div class="chips">${cats.map(c=>`<button data-act="e-cat" data-v="${esc(c.n)}" aria-pressed="${es.cat===c.n}">${esc(c.n)}</button>`).join('')}</div></div>${err.cat?`<div class="err">${err.cat}</div>`:''}`:''}
   ${t==='move'?`<div class="fld"><span>ย้ายจาก</span><div class="seg wrap">${accBtns('e-acc',es.acc)}</div></div>
     <div class="fld"><span>ไปที่</span><div class="seg wrap">${accBtns('e-to',es.to)}</div><span class="hint">เช่น เอาเงินสดไปฝาก SCB หรือโอนจาก KTB ไป SCB ไม่นับเป็นรายรับหรือรายจ่าย</span></div>
     ${err.acc?`<div class="err">${err.acc}</div>`:''}`
+  :t==='cap'?`<div class="fld"><span>ประเภทเงินทุน</span><div class="chips">${CAPK.map(k=>`<button data-act="e-capk" data-v="${k}" aria-pressed="${(es.cat||CAPK[0])===k}">${k}</button>`).join('')}</div></div>
+    <label class="fld"><span>${(es.cat||CAPK[0])==='ขายหุ้น'?'ชื่อผู้ซื้อหุ้น':'ชื่อผู้ลงเงิน'}</span><input id="f-inv" value="${esc(es.inv||'')}" maxlength="60" autocomplete="off" placeholder="เช่น ชื่อเจ้าของหรือหุ้นส่วน"></label>
+    <div class="fld"><span>เงินเข้าบัญชี</span><div class="seg wrap">${accBtns('e-acc',es.acc)}</div>
+    <span class="hint">เงินที่ลงเพิ่มหรือได้จากการขายหุ้น ยอดเงินในบัญชีจะเพิ่มขึ้น แต่ไม่นับเป็นรายรับ กำไรของร้านจึงไม่เพิ่ม</span></div>`
   :t==='draw'?`<div class="fld"><span>ถอนจาก</span><div class="seg wrap">${accBtns('e-acc',es.acc)}</div>
     <span class="hint">เงินที่เจ้าของเอาไปใช้ส่วนตัว ยอดเงินในบัญชีจะลดลง แต่ไม่นับเป็นค่าใช้จ่าย กำไรของร้านจึงไม่ลด</span></div>`
   :`<div class="fld"><span>${t==='in'?'รับเงินทาง':'จ่ายเงินทาง'}</span><div class="seg wrap">${accBtns('e-acc',es.acc,es.credit)}<button data-act="e-credit" aria-pressed="${es.credit}">${t==='in'?'ลูกค้าค้าง':'ค้างจ่าย'}</button></div></div>`}
   ${credit}
   <label class="fld"><span>วันที่</span><input id="f-date" type="date" value="${esc(es.date)}"></label>
   ${err.date?`<div class="err">${err.date}</div>`:''}
-  <label class="fld"><span>หมายเหตุ</span><input id="f-note" value="${esc(es.note)}" placeholder="${t==='in'?'เช่น ขนมชั้น 20 กล่อง':t==='out'?'เช่น แป้งข้าวเจ้า 5 กก.':t==='draw'?'เช่น ใช้จ่ายในบ้าน':'เช่น ฝากเงินสดเข้าบัญชี'}" maxlength="120" autocomplete="off"></label>
+  <label class="fld"><span>หมายเหตุ</span><input id="f-note" value="${esc(es.note)}" placeholder="${t==='in'?'เช่น ขนมชั้น 20 กล่อง':t==='out'?'เช่น แป้งข้าวเจ้า 5 กก.':t==='draw'?'เช่น ใช้จ่ายในบ้าน':t==='cap'?'เช่น 10 หุ้น หุ้นละ 1,000 บาท':'เช่น ฝากเงินสดเข้าบัญชี'}" maxlength="120" autocomplete="off"></label>
   ${t!=='move'?`<div class="fld"><span>รูปใบเสร็จ</span>
     ${es.rcData?`<div class="rc-row"><img class="thumb" src="${es.rcData}" alt="รูปใบเสร็จที่เลือก">${es.ro?'':'<button class="btn sm" data-act="rc-remove">เอาออก</button>'}</div>`
     :es.rc?`<div class="btns"><button class="btn sm" data-act="rc-view" data-v="${esc(es.rc)}">ดูใบเสร็จ</button>${es.ro?'':'<button class="btn sm" data-act="rc-remove">เอาออก</button>'}</div>`
@@ -383,6 +409,7 @@ function saveEntry(){
   const e={t:es.t,amt,note:es.note.trim(),by:user.uid,at:now};
   if(es.t==='move'){e.acc=es.acc;e.to=es.to;e.cat='';e.credit=false;e.cid='';e.due=''}
   else if(es.t==='draw'){e.acc=es.acc;e.to='';e.cat='';e.credit=false;e.cid='';e.due=''}
+  else if(es.t==='cap'){e.acc=es.acc;e.to='';e.cat=CAPK.includes(es.cat)?es.cat:CAPK[0];e.inv=(es.inv||'').trim();e.credit=false;e.cid='';e.due=''}
   else{e.cat=es.cat;e.acc=es.acc;e.credit=!!es.credit;e.cid=es.credit?cid:'';e.due=es.credit?(es.due||''):''}
   if(es.rcData){const rcid='r'+rid();fire(setDoc(doc(fb.db,'receipts',rcid),{data:es.rcData,d:es.date,by:user.uid,at:Date.now()}),'receipt');e.rc=rcid}
   else e.rc=es.rcDrop?'':(es.rc||'');
@@ -652,9 +679,9 @@ function exportCsv(scope){
   const mk=ui.month,y=mk.slice(0,4);
   const list=M.entries.filter(e=>scope==='m'?monthOf(e.d)===mk:e.d.startsWith(y)).slice().reverse();
   const cell=v=>{if(typeof v==='number')return String(v);let s=String(v??'');if(/^[=+\-@]/.test(s))s="'"+s;return /[",\r\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
-  const head=['วันที่','ประเภท','หมวด','จำนวนเงิน','ช่องทาง','สถานะ','ชำระแล้ว','คงค้าง','ชื่อลูกค้า/เจ้าหนี้','หมายเหตุ','มีใบเสร็จ'];
+  const head=['วันที่','ประเภท','หมวด','จำนวนเงิน','ช่องทาง','สถานะ','ชำระแล้ว','คงค้าง','ชื่อลูกค้า/เจ้าหนี้/ผู้ลงทุน','หมายเหตุ','มีใบเสร็จ'];
   const rows=list.map(e=>[e.d,TYPE[e.t],e.t==='move'?`${accName(e.acc)} → ${accName(e.to)}`:e.t==='draw'?'ถอนเงินเจ้าของ':e.cat,e.amt,e.imp?'ยอดยกมา':e.credit?'เงินเชื่อ':accName(e.acc),
-    e.credit?(due(e)>0?'ค้างชำระ':'ชำระครบ'):'ชำระแล้ว',e.credit?r2(paid(e)):e.amt,due(e),e.cid&&M.contacts[e.cid]?M.contacts[e.cid].name:'',e.note||'',e.rc||e.att?'มี':'']);
+    e.credit?(due(e)>0?'ค้างชำระ':'ชำระครบ'):'ชำระแล้ว',e.credit?r2(paid(e)):e.amt,due(e),e.t==='cap'?(e.inv||''):e.cid&&M.contacts[e.cid]?M.contacts[e.cid].name:'',e.note||'',e.rc||e.att?'มี':'']);
   const csv='﻿'+[head,...rows].map(r=>r.map(cell).join(',')).join('\r\n');
   saveFile(scope==='m'?`บัญชีร้าน-${mk}.csv`:`บัญชีร้าน-ปี${+y+543}.csv`,csv,'text/csv;charset=utf-8');
 }
@@ -794,8 +821,9 @@ document.addEventListener('click',ev=>{
     case 'si-save':saveItem();break;
     case 'si-off':readItem();si.confirmOff=true;showSheet(itemFormHtml(),true);break;
     case 'si-off-yes':{const n=stockItem(si.id)?.name||'';fire(setDoc(doc(fb.db,'stock',si.id),{off:true,upd:Date.now()},{merge:true}),'item');audit('stock-off','','',null,{name:n});closeSheet();toast(`เลิกใช้ ${n} แล้ว`);break}
-    case 'e-type':readEntry();if(es.t!==v){es.t=v;es.cat=hasCat(v)?(visCats(v)[0]?.n||''):'';es.cid='';es.newC=false;if(!hasCat(v))es.credit=false;if(v==='move'&&es.to===es.acc)es.to=defTo(es.acc)}rerE();break;
+    case 'e-type':readEntry();if(es.t!==v){es.t=v;es.cat=hasCat(v)?(visCats(v)[0]?.n||''):v==='cap'?CAPK[0]:'';es.cid='';es.newC=false;if(!hasCat(v))es.credit=false;if(v==='move'&&es.to===es.acc)es.to=defTo(es.acc)}rerE();break;
     case 'e-cat':readEntry();es.cat=v;rerE();break;
+    case 'e-capk':readEntry();es.cat=v;rerE();break;
     case 'e-acc':readEntry();es.acc=v;es.credit=false;if(es.t==='move'&&es.to===v)es.to=defTo(v);rerE();break;
     case 'e-credit':readEntry();es.credit=true;rerE();break;
     case 'e-to':readEntry();es.to=v;rerE();break;
