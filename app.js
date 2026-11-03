@@ -39,7 +39,7 @@ const visAccs=()=>M.s.accs.filter(a=>!a.h);
 
 let ui=Object.assign({tab:'home',filter:'all',side:'in',smode:'in',sq:''},LS.get('bp_ui',{}));
 ui.month=monthOf(todayKey());
-let cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null};
+let cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{}};
 let fb=null,user=null,role=null,canWrite=false,M=null,unsubs=[],memberUnsub=null,pending=false,fromCache=true,loaded=false,gateMode='';
 let es=null,ps=null,ss=null;
 const isOwner=()=>role==='owner';
@@ -632,29 +632,34 @@ function subscribe(){
   unsubs.push(onSnapshot(doc(fb.db,'stockcounts',monthOf(todayKey())),{includeMetadataChanges:true},s=>{
     cache.count=s.exists()?s.data():null;upd('count',s.metadata);schedule();
   },onErr));
+  // item photos: everyone sees them; if the rules aren't published yet the rest of the app still works
+  unsubs.push(onSnapshot(collection(fb.db,'stockimg'),snap=>{
+    for(const ch of snap.docChanges()){const d=ch.type==='removed'?null:ch.doc.data()?.data;if(d)cache.simg[ch.doc.id]=d;else delete cache.simg[ch.doc.id]}
+    schedule();
+  },e=>console.warn('stockimg',e?.code||e)));
   cache.stockcost={};
   if(isOwner())unsubs.push(onSnapshot(collection(fb.db,'stockcost'),snap=>{
     for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.stockcost[ch.doc.id];else cache.stockcost[ch.doc.id]=ch.doc.data()}
     schedule();
   },onErr));
 }
-function stopData(){unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null};loaded=false}
+function stopData(){unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{}};loaded=false}
 
 /* ---------- receipts (photo stored compressed in Firestore) ---------- */
-async function compressImage(file){
+async function compressImage(file,max0=1400,q0=.72,lim=650000,hard=900000){
   const url=URL.createObjectURL(file);
   try{
     const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
-    let max=1400,q=.72,out='';
+    let max=max0,q=q0,out='';
     for(let k=0;k<6;k++){
       const s=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
       const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.naturalWidth*s));c.height=Math.max(1,Math.round(img.naturalHeight*s));
       const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);g.drawImage(img,0,0,c.width,c.height);
       out=c.toDataURL('image/jpeg',q);
-      if(out.length<650000)return out;
+      if(out.length<lim)return out;
       max=Math.round(max*.8);q=Math.max(.5,q-.06);
     }
-    return out.length<900000?out:null;
+    return out.length<hard?out:null;
   }finally{URL.revokeObjectURL(url)}
 }
 async function viewReceipt(id){
@@ -686,7 +691,7 @@ function exportCsv(scope){
   saveFile(scope==='m'?`บัญชีร้าน-${mk}.csv`:`บัญชีร้าน-ปี${+y+543}.csv`,csv,'text/csv;charset=utf-8');
 }
 function exportBackup(){
-  const out={format:'baanpleng-books',version:1,exportedAt:new Date().toISOString(),settings:cache.settings||{},contacts:cache.contacts,days:cache.days,stock:cache.stock,stockcost:cache.stockcost};
+  const out={format:'baanpleng-books',version:1,exportedAt:new Date().toISOString(),settings:cache.settings||{},contacts:cache.contacts,days:cache.days,stock:cache.stock,stockcost:cache.stockcost,stockimg:cache.simg};
   saveFile(`baanpleng-backup-${todayKey()}.json`,JSON.stringify(out),'application/json');
   toast('ดาวน์โหลดไฟล์สำรองแล้ว');
 }
@@ -815,6 +820,8 @@ document.addEventListener('click',ev=>{
     case 'lab-print':if(lab&&lab.items.length)printLabels();break;
     case 'lab-png':if(lab&&lab.items.length===1)saveLabelPng();break;
     case 'so-save':saveOp(v==='scan');break;
+    case 'si-imgdel':readItem();si.imgNew='';si.imgDrop=true;showSheet(itemFormHtml(),true);break;
+    case 'st-img':b.classList.toggle('big');break;
     case 'si-addcode':readItem();si.codes.push({c:'',pack:'1',label:''});showSheet(itemFormHtml(),true);break;
     case 'si-rmcode':readItem();si.codes.splice(+v,1);showSheet(itemFormHtml(),true);break;
     case 'si-scancode':readItem();openScanner('item');break;
@@ -854,6 +861,11 @@ document.addEventListener('click',ev=>{
 });
 document.addEventListener('change',async ev=>{
   const t=ev.target;
+  if(t.id==='si-img'&&t.files?.[0]&&si){
+    readItem();const f=t.files[0];toast('กำลังย่อรูป…');
+    try{const d=await compressImage(f,640,.75,150000,220000);if(!d){toast('รูปใหญ่เกินไป ลองถ่ายใหม่');return}if(!si)return;si.imgNew=d;si.imgDrop=false;showSheet(itemFormHtml(),true)}
+    catch(e){toast('เปิดรูปไม่ได้ ลองเลือกรูปอื่น')}
+  }
   if(t.id==='f-rc'&&t.files?.[0]&&es){
     readEntry();const f=t.files[0];toast('กำลังย่อรูป…');
     try{const d=await compressImage(f);if(!d){toast('รูปใหญ่เกินไป ลองถ่ายใหม่');return}if(!es)return;es.rcData=d;es.rcDrop=false;rerE()}
@@ -936,12 +948,15 @@ function vStock(){
   <section class="day"><div class="row-head"><h2>วัตถุดิบ</h2><span class="muted small">แตะเพื่อ${SMODE[mode]}</span></div>
   <div id="st-list">${stockListHtml(shown,lines)}</div></section>`;
 }
+const imgOf=id=>(cache.simg||{})[id]||'';
+function thumbHtml(it){const src=imgOf(it.id);
+  return src?`<img class="sthumb${isLow(it)?' low':''}" src="${esc(src)}" alt="" loading="lazy">`:`<span class="sthumb none${isLow(it)?' low':''}" aria-hidden="true">${esc((it.name||'?').trim().charAt(0))}</span>`}
 function stockListHtml(shown,lines){
   if(!stockItems().length)return `<div class="empty"><b>ยังไม่มีวัตถุดิบ</b><p>${isOwner()?'กด "สแกนบาร์โค้ด" ที่ห่อวัตถุดิบ หรือ "+ เพิ่มวัตถุดิบ" สำหรับของที่ไม่มีบาร์โค้ด':'ให้เจ้าของร้านเพิ่มรายการวัตถุดิบก่อน'}</p></div>`;
   if(!shown.length)return `<div class="empty"><b>ไม่พบ</b><p>ไม่มีวัตถุดิบที่ตรงกับคำค้น</p></div>`;
   const mode=ui.smode||'in';
   return `<div class="list">${shown.map(it=>{const v=Math.max(0,it.qty)*avgOf(it.id),ln=lines[it.id];
-    return `<button class="row" data-act="st-item" data-id="${esc(it.id)}"><span class="dot ${isLow(it)?'out':'in'}"></span>
+    return `<button class="row" data-act="st-item" data-id="${esc(it.id)}">${thumbHtml(it)}
       <span class="main"><span class="t">${esc(it.name)}</span><span class="s"><span>${esc(it.cat||'')}${packsOf(it).length?'':' · ไม่มีบาร์โค้ด'}</span>
       ${isLow(it)?'<span class="chip bad">ใกล้หมด</span>':''}${mode==='count'?(ln?'<span class="chip ok">นับแล้ว</span>':'<span class="chip warn">ยังไม่นับ</span>'):''}</span></span>
       <span class="rem"><b class="${it.qty<0?'neg':''}">${qfmt(it.qty)} ${esc(it.unit)}</b>${isOwner()&&v?`<span class="muted small">${money(v)} บาท</span>`:''}</span></button>`}).join('')}</div>`;
@@ -977,6 +992,7 @@ function stockOpHtml(){
   const unitPrice=numx(sa.price)>0?numx(sa.price):0;
   const brands=ps.filter(x=>x.label).length>0||ps.length>1;
   return `<div class="sh-head"><h2>${esc(it.name)}</h2><button class="icon" data-act="close" aria-label="ปิด">×</button></div>
+  ${imgOf(it.id)?`<button class="opimg" data-act="st-img" aria-label="ขยายรูป"><img src="${esc(imgOf(it.id))}" alt="รูป ${esc(it.name)}"></button>`:''}
   <div class="card tight"><div class="ln"><span>คงเหลือ</span><b class="${it.qty<0?'neg':''}">${qfmt(it.qty)} ${u}</b></div>
     ${isOwner()?`<div class="ln"><span>ราคาเฉลี่ย</span><span>${avg?pfmt(avg)+' บาท / '+u:'ยังไม่มีราคา'}</span></div><div class="ln"><span>มูลค่า</span><span>${money(Math.max(0,it.qty)*avg)} บาท</span></div>`:''}
     ${+it.min?`<div class="ln"><span>ขั้นต่ำ</span><span>${qfmt(it.min)} ${u}</span></div>`:''}
@@ -1050,7 +1066,7 @@ function openItemForm(id,opt={}){
   si={id,name:it?.name||'',unit:it?.unit||'กล่อง',cat:it?.cat||SCATS[0],min:it?String(it.min||''):'',
     codes:it?packsOf(it).map(p=>({c:p.c,pack:p.pack,label:p.label,gen:p.gen,price:p.pack===1?lastPrice(id,p.k):''})):(opt.code?[{c:opt.code,pack:1,label:'',price:''}]:[]),
     qty0:'',cost:id&&avgOf(id)?String(r4(avgOf(id))):'',err:'',link:opt.code&&!id?'':null,scanCode:opt.code||'',confirmOff:false,
-    cunit:'กล่อง'};
+    cunit:'กล่อง',imgNew:'',imgDrop:false};
   si.cost0=si.cost;
   showSheet(itemFormHtml());
 }
@@ -1079,6 +1095,10 @@ function itemFormHtml(){
       <span class="hint">สแกนบาร์โค้ดนี้ 1 ครั้ง = 1 ${esc(t?.unit||'')} ของ ${esc(t?.name||'')}</span>`})():`
   ${convertHtml()}
   <label class="fld"><span>ชื่อวัตถุดิบ</span><input id="si-name" value="${esc(si.name)}" maxlength="60" placeholder="เช่น ครีมเหลว 1 ลิตร, กะทิ 250 มล." autocomplete="off"></label>
+  ${(()=>{const cur=si.imgDrop?'':(si.imgNew||(si.id?imgOf(si.id):''));return `<div class="fld"><span>รูปวัตถุดิบ</span>
+    <div class="imgrow">${cur?`<img class="sthumb lg" src="${esc(cur)}" alt="รูปวัตถุดิบ">`:'<span class="sthumb lg none" aria-hidden="true">ไม่มีรูป</span>'}
+    <div class="btns"><label class="btn sm filebtn">${cur?'เปลี่ยนรูป':'ถ่ายหรือเลือกรูป'}<input type="file" id="si-img" class="vh" accept="image/*"></label>${cur?'<button class="btn sm" data-act="si-imgdel">เอาออก</button>':''}</div></div>
+    <span class="hint">ช่วยให้พนักงานหยิบถูกชิ้น โดยเฉพาะของที่หน้าตาคล้ายกัน</span></div>`})()}
   <div class="two"><label class="fld"><span>นับเป็น</span><select id="si-unit">${(SUNITS.includes(si.unit)?SUNITS:[si.unit,...SUNITS]).map(x=>`<option ${si.unit===x?'selected':''}>${x}</option>`).join('')}</select></label>
     <label class="fld"><span>หมวด</span><select id="si-cat">${SCATS.map(c=>`<option ${si.cat===c?'selected':''}>${c}</option>`).join('')}</select></label></div>
   <span class="hint">นับตามที่หยิบใช้จริง เช่น กล่อง ถุง ขวด สแกน 1 ครั้ง = 1 ${u} ถ้ามีหลายขนาด เช่น กะทิ 150 มล. กับ 250 มล. ให้เพิ่มเป็นคนละรายการ</span>
@@ -1155,6 +1175,8 @@ function saveItem(){
   audit(isNew?'stock-add':'stock-edit','','',null,{name,unit:si.unit});
   const genNew=si.codes.find(c=>c.gen&&!(cache.stock[id]?.codes||{})[codeKey(c.c)]);
   cache.stock[id]={...(cache.stock[id]||{}),...data,qty:isNew?q0:(+cache.stock[id]?.qty||0)};
+  if(si.imgNew){fire(setDoc(doc(fb.db,'stockimg',id),{data:si.imgNew,at:Date.now(),by:user.uid}),'stockimg');cache.simg[id]=si.imgNew}
+  else if(si.imgDrop&&imgOf(id)){fire(deleteDoc(doc(fb.db,'stockimg',id)),'stockimg');delete cache.simg[id]}
   si=null;closeSheet();toast(isNew?`เพิ่ม ${name} แล้ว${autoCode?` · สร้างบาร์โค้ด ${autoCode} ให้`:''}`:'บันทึกแล้ว');
   if(genNew)openLabels([id]);
 }

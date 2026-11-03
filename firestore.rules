@@ -108,6 +108,12 @@ service cloud.firestore {
     match /stockvals/{month} {
       allow read, write: if isOwner();
     }
+    // รูปวัตถุดิบ: ทุกคนในร้านดูได้ เจ้าของร้านเท่านั้นที่เพิ่ม เปลี่ยน หรือลบ
+    match /stockimg/{id} {
+      allow read: if isMember();
+      allow create, update: if isOwner() && request.resource.data.data is string && request.resource.data.data.size() < 300000;
+      allow delete: if isOwner();
+    }
     // ประวัติรับเข้า/เบิกใช้/ปรับจากการนับ: เพิ่มได้อย่างเดียว
     match /stockmoves/{id} {
       allow read: if isMember();
