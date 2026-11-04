@@ -232,18 +232,47 @@ function monthNav(){
 }
 function vList(){
   const mk=ui.month,p=pnl(...mRange(mk));
-  const es_=M.entries.filter(e=>monthOf(e.d)===mk&&(ui.filter==='all'||e.t===ui.filter)&&(isOwner()||!ownerOnlyT(e.t)));
+  const own=isOwner(),A=ui.acc&&M.s.accs.some(a=>a.id===ui.acc)?ui.acc:'';
+  // money account match: moves count on both sides, credit sales/bills on the account they were paid into
+  const onAcc=e=>!A||(e.t==='move'?e.acc===A||e.to===A:e.credit?Object.values(e.pays||{}).some(x=>x&&(x.acc||'cash')===A):(e.acc||'cash')===A);
+  const base=M.entries.filter(e=>monthOf(e.d)===mk&&(own||!ownerOnlyT(e.t))&&(ui.filter==='all'||e.t===ui.filter));
+  const cats=[...new Set(base.filter(e=>e.cat&&(e.t==='in'||e.t==='out'||e.t==='cap')).map(e=>e.cat))].sort((a,b)=>a.localeCompare(b,'th'));
+  const C=ui.cat&&cats.includes(ui.cat)?ui.cat:'';
+  const es_=base.filter(e=>onAcc(e)&&(!C||e.cat===C));
   const groups={};for(const e of es_)(groups[e.d]=groups[e.d]||[]).push(e);
-  const days=Object.entries(groups);
+  const days=Object.entries(groups),filtered=!!(A||C);
+  const accs=M.s.accs.filter(a=>!a.h||a.id===A||M.entries.some(e=>monthOf(e.d)===mk&&(e.acc===a.id||e.to===a.id)));
+  // what the filtered list adds up to
+  let fsum='';
+  if(filtered&&own){
+    const I=es_.filter(e=>e.t==='in').reduce((s,e)=>s+e.amt,0),O=es_.filter(e=>e.t==='out').reduce((s,e)=>s+e.amt,0);
+    let acc='';
+    if(A&&!C){let fin=0,fout=0;for(const x of flows()){if(x.acc!==A||monthOf(x.date)!==mk)continue;if(x.amt>=0)fin+=x.amt;else fout-=x.amt}
+      const bal=balances()[A]||0;
+      acc=`<div class="ln"><span>เงินเข้า ${esc(accName(A))} จริง</span><span class="in">${money(fin)}</span></div>
+        <div class="ln"><span>เงินออกจาก ${esc(accName(A))} จริง</span><span class="out">${money(fout)}</span></div>
+        <div class="ln tot"><span>สุทธิเดือนนี้</span><span class="${fin-fout<0?'neg':''}">${money(fin-fout)}</span></div>
+        <div class="ln"><span>คงเหลือตอนนี้</span><span>${money(bal)}</span></div>
+        <span class="muted small">เงินเข้า-ออกจริงรวมการย้ายเงิน ถอนเงิน เงินทุน และการรับชำระหนี้ของบัญชีนี้</span>`}
+    fsum=`<section class="card tight fsum"><div class="row-head"><h2>${[A&&accName(A),C].filter(Boolean).map(esc).join(' · ')}</h2><span class="muted small">${es_.length} รายการ</span></div>
+      ${I&&O?`<div class="pair3"><div><span class="lbl">รายรับ</span><b class="in">${money(I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(O)}</b></div><div><span class="lbl">ต่าง</span><b class="${I-O<0?'neg':''}">${money(I-O)}</b></div></div>`
+        :I?`<div class="ln tot"><span>รวมรายรับ</span><span class="in">${money(I)}</span></div>`:O?`<div class="ln tot"><span>รวมรายจ่าย</span><span class="out">${money(O)}</span></div>`:''}
+      ${acc}</section>`;
+  }
   return `${monthNav()}
-  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['cap','เงินทุน'],['move','ย้ายเงิน']].filter(([k])=>isOwner()||!ownerOnlyT(k)).map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
-  ${isOwner()?`<div class="sum3"><div><span class="lbl">รายรับ</span><b class="in">${money(p.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(p.C+p.O)}</b></div><div><span class="lbl">กำไร</span><b class="${p.N<0?'neg':''}">${money(p.N)}</b></div></div>
+  <div class="seg wrap">${[['all','ทั้งหมด'],['in','รายรับ'],['out','รายจ่าย'],['draw','ถอนเงิน'],['cap','เงินทุน'],['move','ย้ายเงิน']].filter(([k])=>own||!ownerOnlyT(k)).map(([k,l])=>`<button data-act="filter" data-v="${k}" aria-pressed="${ui.filter===k}">${l}</button>`).join('')}</div>
+  <div class="lfilt">
+    <div class="chips" role="group" aria-label="กรองตามบัญชี"><button data-act="lacc" data-v="" aria-pressed="${!A}">ทุกบัญชี</button>${accs.map(a=>`<button data-act="lacc" data-v="${esc(a.id)}" aria-pressed="${A===a.id}">${esc(a.n)}</button>`).join('')}</div>
+    ${cats.length?`<select id="l-cat" aria-label="กรองตามหมวด"><option value="">ทุกหมวด</option>${cats.map(c=>`<option ${C===c?'selected':''}>${esc(c)}</option>`).join('')}</select>`:''}
+    ${filtered?'<button class="link" data-act="lclear">ล้างตัวกรอง</button>':''}
+  </div>
+  ${filtered?fsum:own?`<div class="sum3"><div><span class="lbl">รายรับ</span><b class="in">${money(p.I)}</b></div><div><span class="lbl">รายจ่าย</span><b class="out">${money(p.C+p.O)}</b></div><div><span class="lbl">กำไร</span><b class="${p.N<0?'neg':''}">${money(p.N)}</b></div></div>
   ${p.draw?`<div class="note">ถอนเงินเจ้าของเดือนนี้ ${money(p.draw)} บาท (ไม่นับเป็นรายจ่าย)</div>`:''}
   ${p.cap?`<div class="note">เงินทุนเข้าเดือนนี้ ${money(p.cap)} บาท (ไม่นับเป็นรายรับ)</div>`:''}`:''}
   ${days.length?days.map(([d,arr])=>{
     const di=arr.filter(e=>e.t==='in').reduce((s,e)=>s+e.amt,0),dout=arr.filter(e=>e.t==='out').reduce((s,e)=>s+e.amt,0);
-    return `<section class="day"><div class="day-head"><span>${esc(thDay(d))}</span>${isOwner()?`<span><span class="in">+${money(di)}</span> <span class="out">−${money(dout)}</span></span>`:''}</div><div class="list">${arr.map(rowHtml).join('')}</div></section>`;
-  }).join(''):`<div class="empty"><b>ไม่มีรายการ</b><p>ยังไม่มี${ui.filter==='all'?'รายการ':TYPE[ui.filter]}ใน${esc(thMonth(mk))}</p></div>`}`;
+    return `<section class="day"><div class="day-head"><span>${esc(thDay(d))}</span>${own?`<span><span class="in">+${money(di)}</span> <span class="out">−${money(dout)}</span></span>`:''}</div><div class="list">${arr.map(rowHtml).join('')}</div></section>`;
+  }).join(''):`<div class="empty"><b>ไม่มีรายการ</b><p>${filtered?'ไม่มีรายการที่ตรงกับตัวกรองใน':'ยังไม่มี'+(ui.filter==='all'?'รายการ':TYPE[ui.filter])+'ใน'}${esc(thMonth(mk))}</p></div>`}`;
 }
 function vDebt(){
   const s=ui.side,today=todayKey();
@@ -822,6 +851,8 @@ document.addEventListener('click',ev=>{
     case 'so-save':saveOp(v==='scan');break;
     case 'si-imgdel':readItem();si.imgNew='';si.imgDrop=true;showSheet(itemFormHtml(),true);break;
     case 'st-img':b.classList.toggle('big');break;
+    case 'lacc':setUi({acc:v});break;
+    case 'lclear':setUi({acc:'',cat:''});break;
     case 'si-addcode':readItem();si.codes.push({c:'',pack:'1',label:''});showSheet(itemFormHtml(),true);break;
     case 'si-rmcode':readItem();si.codes.splice(+v,1);showSheet(itemFormHtml(),true);break;
     case 'si-scancode':readItem();openScanner('item');break;
@@ -861,6 +892,7 @@ document.addEventListener('click',ev=>{
 });
 document.addEventListener('change',async ev=>{
   const t=ev.target;
+  if(t.id==='l-cat'){setUi({cat:t.value});return}
   if(t.id==='si-img'&&t.files?.[0]&&si){
     readItem();const f=t.files[0];toast('กำลังย่อรูป…');
     try{const d=await compressImage(f,640,.75,150000,220000);if(!d){toast('รูปใหญ่เกินไป ลองถ่ายใหม่');return}if(!si)return;si.imgNew=d;si.imgDrop=false;showSheet(itemFormHtml(),true)}
