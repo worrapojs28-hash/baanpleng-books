@@ -1336,7 +1336,7 @@ function labelsHtml(){
       <div class="labctl">${lab.pick?`<button class="pchip" data-act="lab-pick" data-v="${esc(it.id)}" aria-pressed="${!!sel}">${sel?'เลือกแล้ว':'เลือก'}</button>`:''}
       ${sel?`<div class="qty-row sm"><button class="btn qbtn" data-act="lab-dec" data-v="${esc(it.id)}" aria-label="ลด">−</button><span class="labn">${sel.n} ดวง</span><button class="btn qbtn" data-act="lab-inc" data-v="${esc(it.id)}" aria-label="เพิ่ม">+</button></div>`:''}</div></div>`}).join('')}</div>
   <span class="hint">พิมพ์ลงกระดาษสติกเกอร์ A4 แล้วตัดแปะที่กล่องหรือชั้นวาง หรือบันทึกเป็นรูปไปพิมพ์ด้วยเครื่องพิมพ์ฉลาก · สแกนได้ทั้งกล้องมือถือและเครื่องยิงบาร์โค้ด</span>`}
-  <div class="sh-foot"><button class="btn" data-act="lab-png" ${lab.items.length===1?'':'disabled'}>บันทึกเป็นรูป</button><button class="btn primary" data-act="lab-print" ${lab.items.length?'':'disabled'}>พิมพ์ ${lab.items.reduce((s,x)=>s+x.n,0)} ดวง</button></div>`;
+  <div class="sh-foot stick"><button class="btn" data-act="lab-png" ${lab.items.length===1?'':'disabled'}>บันทึกเป็นรูป</button><button class="btn primary" data-act="lab-print" ${lab.items.length?'':'disabled'}>พิมพ์ ${lab.items.reduce((s,x)=>s+x.n,0)} ดวง</button></div>`;
 }
 function printLabels(){
   let pa=byId('printarea');if(!pa){pa=document.createElement('div');pa.id='printarea';document.body.appendChild(pa)}
