@@ -39,7 +39,7 @@ const visAccs=()=>M.s.accs.filter(a=>!a.h);
 
 let ui=Object.assign({tab:'home',filter:'all',side:'in',smode:'in',sq:''},LS.get('bp_ui',{}));
 ui.month=monthOf(todayKey());
-let cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{}};
+let cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{},moves:{}};
 let fb=null,user=null,role=null,canWrite=false,M=null,unsubs=[],memberUnsub=null,pending=false,fromCache=true,loaded=false,gateMode='';
 let es=null,ps=null,ss=null;
 const isOwner=()=>role==='owner';
@@ -661,6 +661,12 @@ function subscribe(){
   unsubs.push(onSnapshot(doc(fb.db,'stockcounts',monthOf(todayKey())),{includeMetadataChanges:true},s=>{
     cache.count=s.exists()?s.data():null;upd('count',s.metadata);schedule();
   },onErr));
+  // receive / withdraw history for this month and last month
+  cache.moves={};
+  unsubs.push(onSnapshot(query(collection(fb.db,'stockmoves'),where('m','in',[addMonth(curMonth(),-1),curMonth()])),snap=>{
+    for(const ch of snap.docChanges()){if(ch.type==='removed')delete cache.moves[ch.doc.id];else cache.moves[ch.doc.id]=ch.doc.data()}
+    schedule();
+  },e=>console.warn('stockmoves',e?.code||e)));
   // item photos: everyone sees them; if the rules aren't published yet the rest of the app still works
   unsubs.push(onSnapshot(collection(fb.db,'stockimg'),snap=>{
     for(const ch of snap.docChanges()){const d=ch.type==='removed'?null:ch.doc.data()?.data;if(d)cache.simg[ch.doc.id]=d;else delete cache.simg[ch.doc.id]}
@@ -672,7 +678,7 @@ function subscribe(){
     schedule();
   },onErr));
 }
-function stopData(){unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{}};loaded=false}
+function stopData(){unsubs.forEach(u=>{try{u()}catch(e){}});unsubs=[];cache={days:{},contacts:{},settings:null,stock:{},stockcost:{},count:null,simg:{},moves:{}};loaded=false}
 
 /* ---------- receipts (photo stored compressed in Firestore) ---------- */
 async function compressImage(file,max0=1400,q0=.72,lim=650000,hard=900000){
@@ -853,6 +859,8 @@ document.addEventListener('click',ev=>{
     case 'st-img':b.classList.toggle('big');break;
     case 'lacc':setUi({acc:v});break;
     case 'lclear':setUi({acc:'',cat:''});break;
+    case 'st-sall':setUi({sall:v==='1'});break;
+    case 'st-more':setUi({mlim:(ui.mlim||40)+40});break;
     case 'si-addcode':readItem();si.codes.push({c:'',pack:'1',label:''});showSheet(itemFormHtml(),true);break;
     case 'si-rmcode':readItem();si.codes.splice(+v,1);showSheet(itemFormHtml(),true);break;
     case 'si-scancode':readItem();openScanner('item');break;
@@ -977,8 +985,26 @@ function vStock(){
   <input id="st-q" type="search" placeholder="ค้นหาชื่อหรือรหัสบาร์โค้ด" value="${esc(ui.sq||'')}" autocomplete="off" aria-label="ค้นหาวัตถุดิบ">
   ${low.length&&!q?`<section class="day"><div class="row-head"><h2>ต้องซื้อ</h2><span class="muted small">ต่ำกว่าขั้นต่ำที่ตั้งไว้</span></div>
     <div class="chips">${low.map(it=>`<button data-act="st-item" data-id="${esc(it.id)}">${esc(it.name)} · เหลือ ${qfmt(it.qty)} ${esc(it.unit)}</button>`).join('')}</div></section>`:''}
-  <section class="day"><div class="row-head"><h2>วัตถุดิบ</h2><span class="muted small">แตะเพื่อ${SMODE[mode]}</span></div>
-  <div id="st-list">${stockListHtml(shown,lines)}</div></section>`;
+  ${mode==='count'||!items.length?`<section class="day"><div class="row-head"><h2>วัตถุดิบ</h2><span class="muted small">แตะเพื่อ${SMODE[mode]}</span></div>
+  <div id="st-list">${stockListHtml(shown,lines)}</div></section>`
+  :`${q||ui.sall?`<section class="day"><div class="row-head"><h2>${q?'วัตถุดิบที่ค้นเจอ':'วัตถุดิบทั้งหมด'}</h2><span class="muted small">แตะเพื่อ${SMODE[mode]}</span></div>
+  <div id="st-list">${stockListHtml(shown,lines)}</div>${q?'':'<button class="link" data-act="st-sall" data-v="0">ซ่อนรายการวัตถุดิบ</button>'}</section>`
+    :`<span class="hint">ของที่ไม่มีบาร์โค้ด พิมพ์ชื่อในช่องค้นหา หรือ <button class="link" data-act="st-sall" data-v="1">เลือกจากวัตถุดิบทั้งหมด</button></span>`}
+  ${movesListHtml(mode)}`}`;
+}
+function movesListHtml(mode){
+  const t=mode==='in'?'in':'use',lim=ui.mlim||40;
+  const all=Object.values(cache.moves||{}).filter(m=>m&&m.t===t&&cache.stock[m.item]).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const head=`<div class="row-head"><h2>${t==='in'?'รายการรับเข้า':'รายการเบิกใช้'}</h2><span class="muted small">เดือนนี้และเดือนก่อน</span></div>`;
+  if(!all.length)return `<section class="day">${head}<div class="empty"><b>ยังไม่มี${t==='in'?'การรับเข้า':'การเบิกใช้'}</b><p>สแกนบาร์โค้ดหรือค้นหาวัตถุดิบเพื่อ${SMODE[mode]}</p></div></section>`;
+  const groups={};for(const m of all.slice(0,lim)){const d=keyOf(new Date(m.ts||0));(groups[d]=groups[d]||[]).push(m)}
+  const who=e=>String(e||'').split('@')[0];
+  return `<section class="day">${head}${Object.entries(groups).map(([d,arr])=>{const it0=n=>stockItem(n.item);
+    return `<div class="day-head"><span>${esc(thDay(d))}</span><span class="muted small">${arr.length} รายการ</span></div>
+    <div class="list">${arr.map(m=>{const it=it0(m);return `<button class="row" data-act="st-item" data-id="${esc(m.item)}">${thumbHtml(it)}
+      <span class="main"><span class="t">${esc(it.name)}</span><span class="s"><span>${esc(new Date(m.ts).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}))} น.${m.email?' · '+esc(who(m.email)):''}</span></span>${m.note?`<span class="nt">${esc(m.note)}</span>`:''}</span>
+      <span class="rem"><b class="${t==='in'?'in':'out'}">${t==='in'?'+':'−'}${qfmt(Math.abs(m.q))} ${esc(it.unit)}</b></span></button>`}).join('')}</div>`}).join('')}
+    ${all.length>lim?`<button class="btn sm" data-act="st-more">ดูเพิ่ม (${all.length-lim} รายการ)</button>`:''}</section>`;
 }
 const imgOf=id=>(cache.simg||{})[id]||'';
 function thumbHtml(it){const src=imgOf(it.id);
